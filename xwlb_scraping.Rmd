@@ -1,0 +1,118 @@
+---
+title: "新闻联播"
+output: html_document
+---
+
+1、对页码进行循环，提取内文链接，保存在一个列表中
+2、对内文链接列表进行循环，提取内容
+3、内容按行堆叠起来
+
+```{r}
+library(lubridate)
+library(stringr)
+library(tidyverse)
+library(rvest)
+library(foreach)
+library(doParallel)
+library(microbenchmark)
+library(pryr)
+```
+
+
+```{r 单页面测试：内文url}
+#提取内文url
+out_url <- "http://www.xwlb.net.cn/video_1.html"
+page <- read_html(out_url)
+page %>% html_nodes("h2 a") %>% html_attr("href")
+```
+
+
+```{r 单页面测试:内容抓取}
+#提取页面
+in_url <- "http://www.xwlb.net.cn/11199.html"
+news <- read_html(in_url)
+#提取日期
+news %>% 
+  html_nodes(".xwlb h2") %>% 
+  html_text(trim = TRUE) %>% 
+  str_replace_all(c("《新闻联播》主要内容" = "",  "[年|月|日]" = "")) %>% 
+  ymd() -> date
+#提取链接
+news %>% 
+  html_node(".content") %>% 
+  html_text(trim = TRUE) %>% 
+  str_replace_all(c("\\W" = "", "\\d" = "", "[a-zA-Z]" = "")) -> content
+#cbind(date, content)
+tibble(date, content)
+```
+
+```{r 字符拼接测试}
+num <- 11199
+str_glue("http://www.xwlb.net.cn/{num}.html")
+seq(1:10)
+```
+
+```{r 内文url抓取函数}
+in_url_scraping_fun <- function(i){
+  out_url <- str_glue("http://www.xwlb.net.cn/video_{i}.html")
+  page <- read_html(out_url)
+  page %>% html_nodes("h2 a") %>% html_attr("href") -> in_url
+  return(in_url)
+}
+in_url_scraping_fun(1)
+```
+
+
+```{r 内文url抓取测试}
+registerDoParallel(cores = detectCores(logical = FALSE)) #doParallel包
+in_url_list <- unlist(foreach(i = seq(1, 68)) %dopar% in_url_scraping_fun(i))
+in_url_list[1:10]
+length(in_url_list)
+```
+
+```{r 并行测试}
+microbenchmark(
+  do = foreach(i = seq(1, 68)) %do% in_url_scraping_fun(i),
+  do_par = foreach(i = seq(1, 68)) %dopar% in_url_scraping_fun(i),
+  times = 3,
+  unit = "s"
+)
+```
+
+
+```{r 内容面抓取函数}
+news_scraping_fun <- function(in_url){
+  #读取网页
+  news <- read_html(in_url)
+  #提取日期
+  news %>% 
+  html_node(".xwlb h2") %>% 
+  html_text(trim = TRUE) %>% 
+  str_replace_all(c("《新闻联播》主要内容" = "",  "[年|月|日]" = "")) %>% 
+  ymd() -> date
+  #提取内容
+  news %>% 
+  html_node(".content") %>% 
+  html_text(trim = TRUE) %>% 
+  str_replace_all(c("\\W" = "", "\\d" = "", "[a-zA-Z]" = "")) -> content
+  return(tibble(date, content))
+}
+news_scraping_fun("http://www.xwlb.net.cn/11218.html")
+```
+
+
+```{r 函数组合}
+all_scraping_fun <- function(page_range){
+  registerDoParallel(cores = detectCores(logical = FALSE)) #doParallel包
+  in_url_list <- unlist(foreach(i = page_range) %dopar% in_url_scraping_fun(i))
+  news_df <- foreach(j = seq(1, length(in_url_list)),.combine = rbind) %dopar% news_scraping_fun(in_url_list[j])
+}
+news_result <- all_scraping_fun(seq(1, 68))
+news_result
+```
+
+
+```{r}
+object_size(news_result)
+```
+
