@@ -53,10 +53,10 @@ seq(1:10)
 ```
 
 ```{r 内文url抓取函数}
-in_url_scraping_fun <- function(i){
-  out_url <- str_glue("http://www.xwlb.net.cn/video_{i}.html")
-  page <- read_html(out_url)
-  page %>% html_nodes("h2 a") %>% html_attr("href") -> in_url
+in_url_scraping_fun <- function(i){                                 #i为页码
+  out_url <- str_glue("http://www.xwlb.net.cn/video_{i}.html")      #列表页url
+  page <- read_html(out_url)                                        #读取列表页内容
+  page %>% html_nodes("h2 a") %>% html_attr("href") -> in_url       #提取每页的内页链接
   return(in_url)
 }
 in_url_scraping_fun(1)
@@ -64,8 +64,8 @@ in_url_scraping_fun(1)
 
 
 ```{r 内文url抓取测试}
-registerDoParallel(cores = detectCores(logical = FALSE)) #doParallel包
-in_url_list <- unlist(foreach(i = seq(1, 68)) %dopar% in_url_scraping_fun(i))
+registerDoParallel(cores = detectCores()) #doParallel包
+in_url_list <- unlist(foreach(i = seq(1, 68)) %dopar% in_url_scraping_fun(i)) #循环抓取所有列表页的内文链接
 in_url_list[1:10]
 length(in_url_list)
 ```
@@ -73,7 +73,7 @@ length(in_url_list)
 ```{r 并行测试}
 microbenchmark(
   do = foreach(i = seq(1, 68)) %do% in_url_scraping_fun(i),
-  do_par = foreach(i = seq(1, 68)) %dopar% in_url_scraping_fun(i),
+  do_par = foreach(i = seq(1, 68)) %dopar% in_url_scraping_fun(i),    #7倍速度
   times = 3,
   unit = "s"
 )
@@ -102,17 +102,36 @@ news_scraping_fun("http://www.xwlb.net.cn/11218.html")
 
 
 ```{r 函数组合}
-all_scraping_fun <- function(page_range){
-  registerDoParallel(cores = detectCores(logical = FALSE)) #doParallel包
-  in_url_list <- unlist(foreach(i = page_range) %dopar% in_url_scraping_fun(i))
-  news_df <- foreach(j = seq(1, length(in_url_list)),.combine = rbind) %dopar% news_scraping_fun(in_url_list[j])
+all_scraping_fun <- function(last_page){      #输入末页页码
+  #调用多线程
+  registerDoParallel(cores = detectCores())
+  #循环所有列表页，提取内页url列表
+  in_url_list <- unlist(foreach(i = seq(1, last_page)) %dopar% in_url_scraping_fun(i))
+  #从从内页循环提取新闻内容，并按行堆叠
+  foreach(j = seq(1, length(in_url_list)),.combine = rbind) %dopar% news_scraping_fun(in_url_list[j])
 }
-news_result <- all_scraping_fun(seq(1, 68))
+news_result <- all_scraping_fun(68)
 news_result
+object_size(news_result)
 ```
 
 
 ```{r}
-object_size(news_result)
+#单线程函数
+all_scraping_fun_do <- function(last_page){      #输入末页页码
+  #循环所有列表页，提取内页url列表
+  in_url_list <- unlist(foreach(i = seq(1, last_page)) %do% in_url_scraping_fun(i))
+  #从从内页循环提取新闻内容，并按行堆叠
+  foreach(j = seq(1, length(in_url_list)),.combine = rbind) %do% news_scraping_fun(in_url_list[j])
+}
+```
+
+```{r}
+microbenchmark(
+  scraping_do = all_scraping_fun_do(68),
+  scraping_par = all_scraping_fun(68),
+  times = 1,
+  unit = "s"
+)
 ```
 
