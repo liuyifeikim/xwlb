@@ -1,0 +1,190 @@
+---
+title: "analysing"
+output: html_document
+---
+0、cidian词典包
+1、分词词典不起作用
+2、用并行方法实现每行分词
+3、jieba分词基本流程
+4、jieba使用词典分词
+
+```{r}
+#抓取函数需要的库
+library(lubridate)
+library(tidyverse)
+library(readxl) #read_xlsx
+library(rvest)
+library(foreach)
+library(doParallel)
+
+#分析需要的库
+library(microbenchmark)
+library(pryr)
+library(parallel)
+library(tidytext)
+library(jiebaR)
+library(Rwordseg) #要装jdk，rjava并设置系统环境 http://jianl.org/cn/R/Rwordseg.html
+library(tmcn)     #NTUSD: National Taiwan University Semantic Dictionary 中文情感极性词典;stopwordsCN() 中文停用词
+library(devtools) #install_github()
+# install_github("qinwf/cidian") 
+# library(cidian) #可以安装搜狗词典
+```
+
+```{r 调用网页抓取函数}
+source("xwlb_scraping_fun.r", encoding = "utf-8") #会调用脚本中的库
+```
+
+```{r 安装搜狗字典优化分词，对jieba来说没有用}
+# jieba的字典：
+# 1、可以自行设置txt文件放入工作环境中，建议使用notepad++编辑，将编码设置为utf-8，另存为txt文件
+# 2、利用cidian库将搜狗词库scel转化为dict文件放到jieba的Dict文件夹中
+dir(show_dictpath()) 
+
+# dict <- dir("./Dict") #查看文件夹文件,等于list.file
+# for (i in 1:length(dict)){
+#   installDict(paste("./Dict", dict[i], sep='/'), dictname = dict[i]) #Rwordseg的installDict函数
+# }   #循环安装字典
+# listDict()  #需要cidian库的decode_scel函数将scel文件转为dict文件
+
+#输出tmcn包的中文停词
+#write_delim(tibble(stopwordsCN()),"stopwordsCN.txt",col_names = FALSE) 
+```
+
+```{r 抓取网页}
+news_result <- all_scraping_fun(68)
+head(news_result)
+object_size(news_result)
+class(news_result)
+```
+
+```{r 内容初步清理}
+news_result %>% 
+  mutate(content = str_replace_all(content,
+        c("各位观众晚上好今天是年月日欢迎您收看今天的新闻联播节目今天节目的主要内容有" = "",
+          "央视网消息新闻联播完整版" = "",
+          "央视网消息新闻联播文字版" = "",
+          "新闻特写" = "",
+          "央视快评" = "",
+          "新春走基层" = "",
+          "国内联播快讯" = "",
+          "国际联播快讯" = ""))) -> news_result
+head(news_result)
+```
+
+```{r 分词函数测试}
+content_test <- head(news_result, 10)  #取10条做测试
+content_test
+
+#jieba分词：全部文本统一一拆分
+seg_jb <- segment(content_test$content, worker())
+seg_jb
+
+#Rwordseg分词(向量)：每行为一个列表
+seg_ansj_v <- segmentCN(content_test$content, returnType = "vector")
+seg_ansj_v
+
+#Rwordseg分词(tm)：每行一个向量
+seg_ansj_tm <- segmentCN(content_test$content, returnType = "tm")
+seg_ansj_tm
+```
+
+```{r 分词自定义函数测试}
+#jieba：每行返回一个列表，每个列表是分开的词
+seg_jb_la <- lapply(content_test$content, function(x) {
+  tokens <- segment(x, jiebar = jieba_worker)
+  tokens <- tokens[nchar(tokens) > 1]
+  return(tokens)
+  })
+seg_jb_la
+
+#Rwordseg分词(向量)：每行返回一个列表，每个列表是分开的词
+seg_ansj_v_la <- lapply(content_test$content, function(x) {
+  tokens <- segmentCN(x, returnType = "vector")
+  tokens <- tokens[nchar(tokens) > 1]
+  return(tokens)
+  })
+seg_ansj_v_la
+
+#Rwordseg分词(tm)：每行返回一个列表，每个列表是一个完整向量，没有筛选词长度
+seg_ansj_tm_la <- lapply(content_test$content, function(x) {
+  tokens <- segmentCN(x, returnType = "tm")
+  tokens <- tokens[nchar(tokens) > 1]
+  return(tokens)
+  })
+seg_ansj_tm_la
+```
+
+
+```{r 设定分词函数}
+#jieba函数
+jieba_worker = worker(stop_word = "stopwordsCN.txt")  #设定分词引擎
+jieba_tokenizer <- function(t) {
+  lapply(t, function(x) {
+    tokens <- segment(x, jiebar = jieba_worker)
+    tokens <- tokens[nchar(tokens) > 1] #筛选长度>1的词
+    return(tokens)
+  })
+}
+
+#ansj函数：输出向量
+ansj_tokenizer <- function(t) {                      
+  lapply(t, function(x) {
+    tokens <- segmentCN(x, returnType = "tm")
+    tokens <- tokens[nchar(tokens) > 1] #筛选长度>1的词
+    return(tokens)
+  })
+}
+
+#ansj函数2：输出tm
+ansj_tokenizer <- function(t) {                      
+  lapply(t, function(x) {
+    tokens <- segmentCN(x, returnType = "tm")
+    tokens <- tokens[nchar(tokens) > 1] #筛选长度>1的词
+    return(tokens)
+  })
+}
+```
+
+
+```{r 中文分词}
+#使用jieba方案，比Rwordseg方案快很多，效果最理想
+news_result %>% 
+  unnest_tokens(input = content, output = word, token = jieba_tokenizer) -> news_result_tidy_jb
+news_result_tidy_jb
+```
+
+
+```{r 进一步处理文本数据, fig.width=20, fig.height=10}
+news_result_tidy_jb %>% 
+  group_by(date) %>% 
+  mutate(id = row_number(),
+         word_sum_1_3 = round(n() / 3)) %>% 
+  filter(id <= word_sum_1_3 & date >= "2019-10-01") %>% 
+  summarise(xjp = sum(word=="习近平"),
+            word_sum = n(),
+            prop = xjp / word_sum) %>% 
+  ggplot(aes(date, prop)) +
+  geom_line() +
+  geom_point() +
+  geom_smooth(method = 'loess')
+```
+
+```{r 导入情绪词典}
+#台湾大学简体中文情感极性词典ntusd
+ntusd_positive <- read_csv("./台湾大学的极性词/NTUSD_positive_simplified.txt", col_names = FALSE)
+ntusd_negative <- read_csv("./台湾大学的极性词/NTUSD_negative_simplified.txt", col_names = FALSE)
+ntusd_positive
+ntusd_negative
+
+#清华大学李军中文褒贬义词典
+qh_praise <- read_csv("./清华大学李军中文褒贬义词典/praise.txt", col_names = FALSE)
+qh_degrade <- read_csv("./清华大学李军中文褒贬义词典/degrade.txt", col_names = FALSE)
+qh_praise
+qh_degrade
+
+#大连理工大学情感词汇本体库
+dl_benti <- read_xlsx("./大连理工大学情感词汇本体库/情感词汇本体.xlsx")
+dl_benti
+#glimpse(dl_benti)
+```
+
