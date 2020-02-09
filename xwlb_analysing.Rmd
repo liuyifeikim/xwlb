@@ -2,22 +2,21 @@
 title: "analysing"
 output: html_document
 ---
-0、cidian词典包
-1、分词词典不起作用
-2、用并行方法实现每行分词
-3、jieba分词基本流程
-4、jieba使用词典分词
+0、词典问题：cidian词典包、分词词典不起作用、jieba使用词典分词
+1、用并行方法实现每行分词：lapply改为parLapply、parLapplyLB、future_lapply等
+2、当每个cl的任务中的函数需要第三方库，如何提前在每个cl中导入库
+
 
 ```{r}
 #抓取函数需要的库
 library(lubridate)
 library(tidyverse)
-library(readxl) #read_xlsx
 library(rvest)
 library(foreach)
 library(doParallel)
 
 #分析需要的库
+library(readxl) #read_xlsx
 library(microbenchmark)
 library(pryr)
 library(parallel)
@@ -88,6 +87,8 @@ seg_ansj_tm <- segmentCN(content_test$content, returnType = "tm")
 seg_ansj_tm
 ```
 
+
+
 ```{r 分词自定义函数测试}
 #jieba：每行返回一个列表，每个列表是分开的词
 seg_jb_la <- lapply(content_test$content, function(x) {
@@ -96,6 +97,28 @@ seg_jb_la <- lapply(content_test$content, function(x) {
   return(tokens)
   })
 seg_jb_la
+
+#并行函数分解测试
+cl <- makeCluster(detectCores(logical = FALSE))
+clusterEvalQ(cl, {
+  library(jiebaR)   #在每个worker中载入库
+  jieba_worker <- worker(stop_word = "stopwordsCN.txt") #设置分词引擎
+  }) 
+seg_jb_la_par <- parLapply(cl, content_test$content, function(x) {
+  tokens <- segment(x, jiebar = jieba_worker)
+  tokens <- tokens[nchar(tokens) > 1]
+  return(tokens)
+})
+stopCluster(cl)
+seg_jb_la_par
+
+# cl <- makeCluster(6)
+# seg_jb_pl <- parLapply(cl, content_test$content, function(x) {
+#   tokens <- segment(x, jiebar = jieba_worker)
+#   tokens <- tokens[nchar(tokens) > 1]
+#   return(tokens)
+#   })
+# seg_jb_pl
 
 #Rwordseg分词(向量)：每行返回一个列表，每个列表是分开的词
 seg_ansj_v_la <- lapply(content_test$content, function(x) {
@@ -117,7 +140,7 @@ seg_ansj_tm_la
 
 ```{r 设定分词函数}
 #jieba函数
-jieba_worker = worker(stop_word = "stopwordsCN.txt")  #设定分词引擎
+jieba_worker <- worker(stop_word = "stopwordsCN.txt")  #设定分词引擎
 jieba_tokenizer <- function(t) {
   lapply(t, function(x) {
     tokens <- segment(x, jiebar = jieba_worker)
@@ -126,33 +149,106 @@ jieba_tokenizer <- function(t) {
   })
 }
 
-#ansj函数：输出向量
-ansj_tokenizer <- function(t) {                      
-  lapply(t, function(x) {
-    tokens <- segmentCN(x, returnType = "tm")
-    tokens <- tokens[nchar(tokens) > 1] #筛选长度>1的词
-    return(tokens)
+#jieba并行函数
+jieba_tokenizer_par <- function(t) {
+  parLapply(cl, t, function(x) {
+  tokens <- segment(x, jiebar = jieba_worker)
+  tokens <- tokens[nchar(tokens) > 1]
+  return(tokens)
   })
 }
 
-#ansj函数2：输出tm
-ansj_tokenizer <- function(t) {                      
-  lapply(t, function(x) {
-    tokens <- segmentCN(x, returnType = "tm")
-    tokens <- tokens[nchar(tokens) > 1] #筛选长度>1的词
-    return(tokens)
+#jieba并行函数:load balancing
+jieba_tokenizer_par_lb <- function(t) {
+  parLapplyLB(cl, t, function(x) {
+  tokens <- segment(x, jiebar = jieba_worker)
+  tokens <- tokens[nchar(tokens) > 1]
+  return(tokens)
   })
 }
+
+#全部整合在一起
+jieba_tokenizer_par_all <- function(t) {
+  
+  cl <- makeCluster(detectCores(logical = FALSE))
+  clusterEvalQ(cl, {
+    library(jiebaR)
+    jieba_worker <- worker(stop_word = "stopwordsCN.txt")
+    })
+  
+  parLapply(cl, t, function(x) {
+  tokens <- segment(x, jiebar = jieba_worker)
+  tokens <- tokens[nchar(tokens) > 1]
+  return(tokens)
+  })
+  
+  stopCluster(cl)
+}
+
+# #ansj函数：输出向量
+# ansj_tokenizer <- function(t) {                      
+#   lapply(t, function(x) {
+#     tokens <- segmentCN(x, returnType = "tm")
+#     tokens <- tokens[nchar(tokens) > 1] #筛选长度>1的词
+#     return(tokens)
+#   })
+# }
+# 
+# #ansj函数2：输出tm
+# ansj_tokenizer <- function(t) {                      
+#   lapply(t, function(x) {
+#     tokens <- segmentCN(x, returnType = "tm")
+#     tokens <- tokens[nchar(tokens) > 1] #筛选长度>1的词
+#     return(tokens)
+#   })
+# }
 ```
 
 
 ```{r 中文分词}
 #使用jieba方案，比Rwordseg方案快很多，效果最理想
-news_result %>% 
-  unnest_tokens(input = content, output = word, token = jieba_tokenizer) -> news_result_tidy_jb
+news_result %>% unnest_tokens(input = content, output = word, token = jieba_tokenizer) -> news_result_tidy_jb
 news_result_tidy_jb
 ```
 
+
+```{r 多线程测试}
+#设置线程数
+cl <- makeCluster(detectCores(logical = FALSE))
+#在每个worker中载入相同的库和分词引擎
+clusterEvalQ(cl, {
+  library(jiebaR)
+  jieba_worker <- worker(stop_word = "stopwordsCN.txt")
+  })
+#运行分词处理
+news_result %>% unnest_tokens(input = content, output = word, token = jieba_tokenizer_par) -> news_result_tidy_jb_par
+#停止多线程
+stopCluster(cl)
+news_result_tidy_jb_par
+```
+
+```{r 全过程整合函数}
+#测试未通过
+news_result %>% unnest_tokens(input = content, output = word, token = jieba_tokenizer_par_all)
+```
+
+
+```{r 速度测试}
+cl <- makeCluster(detectCores(logical = FALSE))
+clusterEvalQ(cl, {
+  library(jiebaR)
+  jieba_worker <- worker(stop_word = "stopwordsCN.txt")
+  }) 
+microbenchmark(
+  seq = news_result %>% unnest_tokens(input = content, output = word, token = jieba_tokenizer),
+  par = news_result %>% unnest_tokens(input = content, output = word, token = jieba_tokenizer_par),
+  par_lb = news_result %>% unnest_tokens(input = content, output = word, token = jieba_tokenizer_par_lb),
+  times = 10,
+  unit = "s"
+)
+stopCluster(cl)
+```
+在6核的条件下，并行方案是非并行方案速度的2-3倍，而速度最快的是一般并行方案，随着核数增多，LB方案消耗的时间会增加，反而不如一般并行方案。
 
 ```{r 进一步处理文本数据, fig.width=20, fig.height=10}
 news_result_tidy_jb %>% 
