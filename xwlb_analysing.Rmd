@@ -2,9 +2,11 @@
 title: "analysing"
 output: html_document
 ---
-0、词典问题：cidian词典包、分词词典不起作用、jieba使用词典分词
+
+0、词典问题：jieba字典组合为一个大txt
 1、用并行方法实现每行分词：lapply改为parLapply、parLapplyLB、future_lapply等
 2、当每个cl的任务中的函数需要第三方库，如何提前在每个cl中导入库：clusterEvalQ, clusterExport
+3、定时采集设定
 
 
 ```{r}
@@ -27,31 +29,41 @@ library(Rwordseg) #要装jdk，rjava并设置系统环境 http://jianl.org/cn/R/
 library(tmcn)     #NTUSD: National Taiwan University Semantic Dictionary 中文情感极性词典;stopwordsCN() 中文停用词
 library(devtools) #install_github()
 # install_github("qinwf/cidian") 
-# library(cidian) #可以安装搜狗词典
+library(cidian) #可以安装搜狗词典
 ```
 
 ```{r 调用网页抓取函数}
 source("xwlb_scraping_fun.r", encoding = "utf-8") #会调用脚本中的库
 ```
 
-```{r 安装搜狗字典优化分词，对jieba来说没有用}
+```{r 字典管理}
 # jieba的字典：
 # 1、可以自行设置txt文件放入工作环境中，建议使用notepad++编辑，将编码设置为utf-8，另存为txt文件
 # 2、利用cidian库将搜狗词库scel转化为dict文件放到jieba的Dict文件夹中
-dir(show_dictpath()) 
+show_dictpath()       #词典存放路径
+dir(show_dictpath())  #该路径下的词典文件
+
+#词典格式转化,将字典替换jiebaRD路径下的用户默认词典user.dict.utf8
+decode_scel(scel = "./Dict/党建理论词汇.scel", cpp = TRUE)
+scan(file = "./Dict/党建理论词汇.scel_2020-02-12_22_52_14.dict", what=character(), nlines=30, 
+     sep='\n', encoding='utf-8', fileEncoding='utf-8')
+
+#替换后的用户默认词典，或者直接将该文件转换为txt，用在worker的user参数中
+scan(file = "D:/Program Files/Microsoft/R Open/R-3.5.3/library/jiebaRD/dict/user.dict.utf8", 
+     what=character(), nlines=30, sep='\n', encoding='utf-8', fileEncoding='utf-8')
+
+#输出tmcn包的中文停词，用在worker中
+#write_delim(tibble(stopwordsCN()),"stopwordsCN.txt",col_names = FALSE) 
 
 # dict <- dir("./Dict") #查看文件夹文件,等于list.file
 # for (i in 1:length(dict)){
 #   installDict(paste("./Dict", dict[i], sep='/'), dictname = dict[i]) #Rwordseg的installDict函数
 # }   #循环安装字典
 # listDict()  #需要cidian库的decode_scel函数将scel文件转为dict文件
-
-#输出tmcn包的中文停词
-#write_delim(tibble(stopwordsCN()),"stopwordsCN.txt",col_names = FALSE) 
 ```
 
 ```{r 抓取网页}
-news_result <- all_scraping_fun(68)
+news_result <- all_scraping_fun(69)  #输入末页页码
 head(news_result)
 object_size(news_result)
 class(news_result)
@@ -72,69 +84,62 @@ head(news_result)
 ```
 
 ```{r 分词函数测试}
-content_test <- head(news_result, 10)  #取10条做测试
-content_test
-
-#jieba分词：全部文本统一一拆分
-seg_jb <- segment(content_test$content, worker())
-seg_jb
-
-#Rwordseg分词(向量)：每行为一个列表
-seg_ansj_v <- segmentCN(content_test$content, returnType = "vector")
-seg_ansj_v
-
-#Rwordseg分词(tm)：每行一个向量
-seg_ansj_tm <- segmentCN(content_test$content, returnType = "tm")
-seg_ansj_tm
+# #取10条做测试
+# content_test <- head(news_result, 10)  
+# content_test
+# 
+# #jieba分词：全部文本统一一拆分
+# seg_jb <- segment(content_test$content, worker())
+# seg_jb
+# 
+# #Rwordseg分词(向量)：每行为一个列表
+# seg_ansj_v <- segmentCN(content_test$content, returnType = "vector")
+# seg_ansj_v
+# 
+# #Rwordseg分词(tm)：每行一个向量
+# seg_ansj_tm <- segmentCN(content_test$content, returnType = "tm")
+# seg_ansj_tm
 ```
 
 
 ```{r 分词自定义函数测试}
-#jieba：每行返回一个列表，每个列表是分开的词
-seg_jb_la <- lapply(content_test$content, function(x) {
-  tokens <- segment(x, jiebar = jieba_worker)
-  tokens <- tokens[nchar(tokens) > 1]
-  return(tokens)
-  })
-seg_jb_la
-
-#并行函数分解测试
-cl <- makeCluster(detectCores(logical = FALSE))
-clusterEvalQ(cl, {
-  library(jiebaR)   #在每个worker中载入库
-  jieba_worker <- worker(stop_word = "stopwordsCN.txt") #设置分词引擎
-  }) 
-seg_jb_la_par <- parLapply(cl, content_test$content, function(x) {
-  tokens <- segment(x, jiebar = jieba_worker)
-  tokens <- tokens[nchar(tokens) > 1]
-  return(tokens)
-})
-stopCluster(cl)
-seg_jb_la_par
-
-# cl <- makeCluster(6)
-# seg_jb_pl <- parLapply(cl, content_test$content, function(x) {
+# #jieba：每行返回一个列表，每个列表是分开的词
+# seg_jb_la <- lapply(content_test$content, function(x) {
 #   tokens <- segment(x, jiebar = jieba_worker)
 #   tokens <- tokens[nchar(tokens) > 1]
 #   return(tokens)
 #   })
-# seg_jb_pl
-
-#Rwordseg分词(向量)：每行返回一个列表，每个列表是分开的词
-seg_ansj_v_la <- lapply(content_test$content, function(x) {
-  tokens <- segmentCN(x, returnType = "vector")
-  tokens <- tokens[nchar(tokens) > 1]
-  return(tokens)
-  })
-seg_ansj_v_la
-
-#Rwordseg分词(tm)：每行返回一个列表，每个列表是一个完整向量，没有筛选词长度
-seg_ansj_tm_la <- lapply(content_test$content, function(x) {
-  tokens <- segmentCN(x, returnType = "tm")
-  tokens <- tokens[nchar(tokens) > 1]
-  return(tokens)
-  })
-seg_ansj_tm_la
+# seg_jb_la
+# 
+# #并行函数分解测试
+# cl <- makeCluster(detectCores(logical = FALSE))
+# clusterEvalQ(cl, {
+#   library(jiebaR)   #在每个worker中载入库
+#   jieba_worker <- worker(stop_word = "stopwordsCN.txt") #设置分词引擎
+#   }) 
+# seg_jb_la_par <- parLapply(cl, content_test$content, function(x) {
+#   tokens <- segment(x, jiebar = jieba_worker)
+#   tokens <- tokens[nchar(tokens) > 1]
+#   return(tokens)
+# })
+# stopCluster(cl)
+# seg_jb_la_par
+# 
+# #Rwordseg分词(向量)：每行返回一个列表，每个列表是分开的词
+# seg_ansj_v_la <- lapply(content_test$content, function(x) {
+#   tokens <- segmentCN(x, returnType = "vector")
+#   tokens <- tokens[nchar(tokens) > 1]
+#   return(tokens)
+#   })
+# seg_ansj_v_la
+# 
+# #Rwordseg分词(tm)：每行返回一个列表，每个列表是一个完整向量，没有筛选词长度
+# seg_ansj_tm_la <- lapply(content_test$content, function(x) {
+#   tokens <- segmentCN(x, returnType = "tm")
+#   tokens <- tokens[nchar(tokens) > 1]
+#   return(tokens)
+#   })
+# seg_ansj_tm_la
 ```
 
 
@@ -166,7 +171,6 @@ jieba_tokenizer_par_lb <- function(t) {
   return(tokens)
   })
 }
-
 
 # #ansj函数：输出向量
 # ansj_tokenizer <- function(t) {                      
@@ -217,19 +221,19 @@ news_result_tidy_jb_par
 
 
 ```{r 速度测试}
-cl <- makeCluster(detectCores(logical = FALSE))
-clusterEvalQ(cl, {
-  library(jiebaR)
-  jieba_worker <- worker(stop_word = "stopwordsCN.txt")
-  }) 
-microbenchmark(
-  seq = news_result %>% unnest_tokens(input = content, output = word, token = jieba_tokenizer),
-  par = news_result %>% unnest_tokens(input = content, output = word, token = jieba_tokenizer_par),
-  par_lb = news_result %>% unnest_tokens(input = content, output = word, token = jieba_tokenizer_par_lb),
-  times = 10,
-  unit = "s"
-)
-stopCluster(cl)
+# cl <- makeCluster(detectCores(logical = FALSE))
+# clusterEvalQ(cl, {
+#   library(jiebaR)
+#   jieba_worker <- worker(stop_word = "stopwordsCN.txt")
+#   }) 
+# microbenchmark(
+#   seq = news_result %>% unnest_tokens(input = content, output = word, token = jieba_tokenizer),
+#   par = news_result %>% unnest_tokens(input = content, output = word, token = jieba_tokenizer_par),
+#   par_lb = news_result %>% unnest_tokens(input = content, output = word, token = jieba_tokenizer_par_lb),
+#   times = 10,
+#   unit = "s"
+# )
+# stopCluster(cl)
 ```
 在6核的条件下，并行方案是非并行方案速度的2-3倍，而速度最快的是一般并行方案，随着核数增多，LB方案消耗的时间会增加，反而不如一般并行方案。
 
@@ -238,7 +242,7 @@ news_result_tidy_jb %>%
   group_by(date) %>% 
   mutate(id = row_number(),
          word_sum_1_3 = round(n() / 3)) %>% 
-  filter(id <= word_sum_1_3 & date >= "2019-10-01") %>% 
+  filter(id <= word_sum_1_3 & date >= "2019-01-01") %>% 
   summarise(xjp = sum(word=="习近平"),
             word_sum = n(),
             prop = xjp / word_sum) %>% 
@@ -250,20 +254,42 @@ news_result_tidy_jb %>%
 
 ```{r 导入情绪词典}
 #台湾大学简体中文情感极性词典ntusd
-ntusd_positive <- read_csv("./台湾大学的极性词/NTUSD_positive_simplified.txt", col_names = FALSE)
-ntusd_negative <- read_csv("./台湾大学的极性词/NTUSD_negative_simplified.txt", col_names = FALSE)
+ntusd_positive <- read_csv("./台湾大学的极性词/NTUSD_positive_simplified.txt", col_names = "positive")
+ntusd_negative <- read_csv("./台湾大学的极性词/NTUSD_negative_simplified.txt", col_names = "negative")
 ntusd_positive
 ntusd_negative
 
 #清华大学李军中文褒贬义词典
-qh_praise <- read_csv("./清华大学李军中文褒贬义词典/praise.txt", col_names = FALSE)
-qh_degrade <- read_csv("./清华大学李军中文褒贬义词典/degrade.txt", col_names = FALSE)
+qh_praise <- read_csv("./清华大学李军中文褒贬义词典/praise.txt", col_names = "praise")
+qh_degrade <- read_csv("./清华大学李军中文褒贬义词典/degrade.txt", col_names = "degrade")
 qh_praise
 qh_degrade
 
 #大连理工大学情感词汇本体库
 dl_benti <- read_xlsx("./大连理工大学情感词汇本体库/情感词汇本体.xlsx")
 dl_benti
-#glimpse(dl_benti)
+```
+
+```{r 匹配情感词典, fig.width=20, fig.height=10}
+news_result_tidy_jb %>% 
+  filter(date >= "2019-01-01") %>% 
+  mutate(positive = if_else(word %in% ntusd_positive$positive, 1, 0),
+         negative = if_else(word %in% ntusd_negative$negative, 1, 0),
+         praise = if_else(word %in% qh_praise$praise, 1, 0),
+         degrade = if_else(word %in% qh_degrade$degrade, 1, 0)) %>% 
+  group_by(date) %>% 
+  summarise(positive_sum = sum(positive),
+            negative_sum = sum(negative),
+            praise_sum = sum(praise),
+            degrade_sum = sum(degrade)) %>% 
+  mutate(positive_score = (positive_sum - negative_sum) / (positive_sum + negative_sum),
+         praise_score = (praise_sum - degrade_sum) / (praise_sum + degrade_sum)) %>% 
+  ggplot() +
+  geom_line(aes(date, positive_score), color = "dark blue") +
+  geom_smooth(aes(date, positive_score), method = "loess") + 
+  geom_line(aes(date, praise_score), color = "red") + 
+  geom_smooth(aes(date, praise_score), method = "loess") +
+  theme(axis.title = element_blank(),
+        axis.text = element_text(size = 15))
 ```
 
