@@ -1,5 +1,3 @@
-
-
 #内页链接抓取
 in_url_scraping_fun <- function(i){                                 #i为页码
   out_url <- str_glue("http://www.xwlb.net.cn/video_{i}.html")      #列表页url

@@ -6,7 +6,8 @@ output: html_document
 0、词典问题：jieba字典组合为一个大txt
 1、用并行方法实现每行分词：lapply改为parLapply、parLapplyLB、future_lapply等
 2、当每个cl的任务中的函数需要第三方库，如何提前在每个cl中导入库：clusterEvalQ, clusterExport
-3、定时采集设定
+4、主题模型
+5、创建n元词组
 
 
 ```{r}
@@ -28,8 +29,8 @@ library(jiebaR)
 library(Rwordseg) #要装jdk，rjava并设置系统环境 http://jianl.org/cn/R/Rwordseg.html
 library(tmcn)     #NTUSD: National Taiwan University Semantic Dictionary 中文情感极性词典;stopwordsCN() 中文停用词
 library(devtools) #install_github()
-# install_github("qinwf/cidian") 
-library(cidian) #可以安装搜狗词典
+library(cidian)   #可以安装搜狗词典,install_github("qinwf/cidian") 
+library(topicmodels)  #LDA
 ```
 
 ```{r 调用网页抓取函数}
@@ -99,6 +100,8 @@ head(news_result)
 # #Rwordseg分词(tm)：每行一个向量
 # seg_ansj_tm <- segmentCN(content_test$content, returnType = "tm")
 # seg_ansj_tm
+
+#get_tuple(segment(content_test$content, worker()), size = 2)
 ```
 
 
@@ -145,8 +148,8 @@ head(news_result)
 
 ```{r 设定分词函数}
 #jieba函数
-jieba_worker <- worker(stop_word = "stopwordsCN.txt")  #设定分词引擎
 jieba_tokenizer <- function(t) {
+  jieba_worker <- worker(stop_word = "stopwordsCN.txt")  #设定分词引擎
   lapply(t, function(x) {
     tokens <- segment(x, jiebar = jieba_worker)
     tokens <- tokens[nchar(tokens) > 1] #筛选长度>1的词
@@ -171,6 +174,16 @@ jieba_tokenizer_par_lb <- function(t) {
   return(tokens)
   })
 }
+
+#jieba生成二元词组函数
+jieba_tokenizer_ngram <- function(t) {
+  jieba_worker <- worker(stop_word = "stopwordsCN.txt")  #设定分词引擎
+  lapply(t, function(x) {
+    ngram <- get_tuple(segment(x, jiebar = jieba_worker), size = 2)
+    return(ngram)
+  })
+}
+
 
 # #ansj函数：输出向量
 # ansj_tokenizer <- function(t) {                      
@@ -272,24 +285,52 @@ dl_benti
 
 ```{r 匹配情感词典, fig.width=20, fig.height=10}
 news_result_tidy_jb %>% 
-  filter(date >= "2019-01-01") %>% 
   mutate(positive = if_else(word %in% ntusd_positive$positive, 1, 0),
          negative = if_else(word %in% ntusd_negative$negative, 1, 0),
          praise = if_else(word %in% qh_praise$praise, 1, 0),
-         degrade = if_else(word %in% qh_degrade$degrade, 1, 0)) %>% 
+         degrade = if_else(word %in% qh_degrade$degrade, 1, 0),
+         good = if_else(word %in% ntusd_positive$positive | word %in% qh_praise$praise, 1, 0),
+         bad = if_else(word %in% ntusd_negative$negative | word %in% qh_degrade$degrade, 1, 0)) %>% 
   group_by(date) %>% 
   summarise(positive_sum = sum(positive),
             negative_sum = sum(negative),
             praise_sum = sum(praise),
-            degrade_sum = sum(degrade)) %>% 
+            degrade_sum = sum(degrade),
+            good_sum = sum(good),
+            bad_sum = sum(bad)) %>% 
   mutate(positive_score = (positive_sum - negative_sum) / (positive_sum + negative_sum),
-         praise_score = (praise_sum - degrade_sum) / (praise_sum + degrade_sum)) %>% 
-  ggplot() +
-  geom_line(aes(date, positive_score), color = "dark blue") +
-  geom_smooth(aes(date, positive_score), method = "loess") + 
-  geom_line(aes(date, praise_score), color = "red") + 
-  geom_smooth(aes(date, praise_score), method = "loess") +
-  theme(axis.title = element_blank(),
-        axis.text = element_text(size = 15))
+         praise_score = (praise_sum - degrade_sum) / (praise_sum + degrade_sum),
+         good_score = (good_sum - bad_sum) / (good_sum + bad_sum)) %>% 
+  select(date, positive_score:good_score) %>% 
+  gather(key = score_type, value = score, positive_score:good_score) %>% 
+  arrange(date) %>% 
+  ggplot(aes(date, score, color = score_type), ) +
+  geom_line() +
+  geom_smooth(method = "loess") + 
+  theme(axis.title = element_text(size = 25),
+        axis.text = element_text(size = 15),
+        legend.text = element_text(size=15),
+        legend.title = element_text(size = 20),
+        legend.position = "right")
+```
+
+```{r 最常见的正面/负面词}
+news_result_tidy_jb %>% 
+  mutate(positive = if_else(word %in% ntusd_positive$positive, 1, 0),
+         negative = if_else(word %in% ntusd_negative$negative, 1, 0),
+         praise = if_else(word %in% qh_praise$praise, 1, 0),
+         degrade = if_else(word %in% qh_degrade$degrade, 1, 0),
+         good = if_else(word %in% ntusd_positive$positive | word %in% qh_praise$praise, 1, 0),
+         bad = if_else(word %in% ntusd_negative$negative | word %in% qh_degrade$degrade, 1, 0)) -> news_result_score
+
+news_result_score %>% filter(positive == 1) %>% count(word) %>% top_n(wt = n, n = 10) %>% arrange(desc(n))
+news_result_score %>% filter(negative == 1) %>% count(word) %>% top_n(wt = n, n = 10) %>% arrange(desc(n))
+news_result_score %>% filter(praise == 1) %>% count(word) %>% top_n(wt = n, n = 10) %>% arrange(desc(n))
+news_result_score %>% filter(degrade == 1) %>% count(word) %>% top_n(wt = n, n = 10) %>% arrange(desc(n))
+```
+
+```{r 主题模型}
+news_result_tidy_jb %>% 
+  count(date, word)
 ```
 
