@@ -8,6 +8,8 @@ output: html_document
 2、当每个cl的任务中的函数需要第三方库，如何提前在每个cl中导入库：clusterEvalQ, clusterExport
 4、主题模型
 5、创建n元词组
+6、group_by柱状图排序问题
+7、停词管理
 
 
 ```{r}
@@ -17,13 +19,13 @@ library(tidyverse)
 library(rvest)
 library(foreach)
 library(doParallel)
+library(parallel)
 
 #分析需要的库
 library(readxl) #read_xlsx
 library(microbenchmark)
 library(snow)   #snow.time
 library(pryr)
-library(parallel)
 library(tidytext)
 library(jiebaR)
 library(Rwordseg) #要装jdk，rjava并设置系统环境 http://jianl.org/cn/R/Rwordseg.html
@@ -64,10 +66,13 @@ scan(file = "D:/Program Files/Microsoft/R Open/R-3.5.3/library/jiebaRD/dict/user
 ```
 
 ```{r 抓取网页}
-news_result <- all_scraping_fun(69)  #输入末页页码
+news_result <- all_scraping_fun_new()  #自动侦测末页页码
 head(news_result)
 object_size(news_result)
 class(news_result)
+stopCluster(cl)     #在函数中停止没有用
+getDoParWorkers()   #看有多少worder
+getDoParName()      #看集群名称
 ```
 
 ```{r 内容初步清理}
@@ -80,7 +85,9 @@ news_result %>%
           "央视快评" = "",
           "新春走基层" = "",
           "国内联播快讯" = "",
-          "国际联播快讯" = ""))) -> news_result
+          "国际联播快讯" = "",
+          "新闻联播" = "",
+          "央视网" = ""))) -> news_result
 head(news_result)
 ```
 
@@ -188,7 +195,7 @@ jieba_tokenizer_ngram <- function(t) {
 # #ansj函数：输出向量
 # ansj_tokenizer <- function(t) {                      
 #   lapply(t, function(x) {
-#     tokens <- segmentCN(x, returnType = "tm")
+#     tokens <- segmentCN(x, returnType = "vector")
 #     tokens <- tokens[nchar(tokens) > 1] #筛选长度>1的词
 #     return(tokens)
 #   })
@@ -330,7 +337,61 @@ news_result_score %>% filter(degrade == 1) %>% count(word) %>% top_n(wt = n, n =
 ```
 
 ```{r 主题模型}
+#需要先将tidy格式转为dtm格式
 news_result_tidy_jb %>% 
-  count(date, word)
+  count(date, word) %>% 
+  cast_dtm(date, word, n) -> news_result_dtm #转化速度很快
+news_result_dtm
+object_size(news_result_dtm)
+```
+
+```{r 调用LDA算法}
+#LDA算法
+news_lda_5 <- LDA(news_result_dtm, k = 5, control = list(seed = 100)) #计算时间较长
+news_lda_5
+```
+
+```{r 输出每个词属于每个主题的概率, fig.height=8, fig.width=20}
+#重新转为tidy格式
+news_lda_5_tidy_word <- tidy(news_lda_5, matrix = "beta")
+news_lda_5_tidy_word
+
+#每个主题最具代表性的10个词
+# news_lda_5_tidy_word %>% 
+#   group_by(topic) %>% 
+#   top_n(wt = beta, n = 10) %>% 
+#   ggplot(aes(reorder(term,beta), beta, fill = as.factor(topic))) +
+#   geom_col() +
+#   coord_flip() +
+#   facet_wrap(~topic, nrow = 1, scales = "free") +
+#   theme(axis.text = element_text(size=15))
+
+#确保每个group中降序排列的写法
+#https://trinkerrstuff.wordpress.com/2016/12/23/ordering-categories-within-ggplot2-facets/
+news_lda_5_tidy_word %>% 
+  group_by(topic) %>% 
+  top_n(wt = beta, n = 10) %>% 
+  arrange(desc(beta)) %>% 
+  ungroup() %>% 
+  mutate(term = factor(paste(term, topic, sep = "_"), levels = rev(paste(term, topic, sep = "_")))) %>%
+  ggplot(aes(term, beta, fill = as.factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +  
+  facet_wrap(~topic, nrow = 1, scales = "free") +  
+  theme(axis.text = element_text(size=15),
+        axis.title = element_text(size = 15),
+        strip.text = element_text(size = 20)) +
+  scale_x_discrete(labels = function(x) gsub("_.+$", "", x))
+```
+
+```{r 输出每个文档中的词属于每个主题的概率, fig.height=8, fig.width=20}
+#重新转为tidy格式
+news_lda_5_tidy_doc <- tidy(news_lda_5, matrix = "gamma")
+news_lda_5_tidy_doc
+```
+
+```{r 将每个文档每个单词分配给一个主题}
+assign <- augment(news_lda_5, data = news_result_dtm)
+assign
 ```
 

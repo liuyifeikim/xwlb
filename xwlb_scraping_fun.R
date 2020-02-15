@@ -24,11 +24,16 @@ news_scraping_fun <- function(in_url){
 }
 
 #总函数
-all_scraping_fun <- function(last_page){      #输入末页页码
-  #调用多线程
-  registerDoParallel(cores = detectCores())
+all_scraping_fun_new <- function(){
+  #末页页码
+  out_url <- str_glue("http://www.xwlb.net.cn/video_1.html")        #列表页url
+  page <- read_html(out_url)                                        #读取列表页内容
+  last_page <- page %>% html_nodes("a:nth-child(13)") %>% html_attr("href") %>% str_extract("\\d+") %>% as.integer()
+  #调用多线程:snow的sock集群
+  cl <- makeCluster(cl)
+  registerDoParallel(cl)
   #循环所有列表页，提取内页url列表
   in_url_list <- unlist(foreach(i = seq(1, last_page)) %dopar% in_url_scraping_fun(i))
-  #从从内页循环提取新闻内容，并按行堆叠
-  foreach(j = seq(1, length(in_url_list)),.combine = rbind) %dopar% news_scraping_fun(in_url_list[j])
+  #从内页循环提取新闻内容，并按行堆叠
+  foreach(j = seq(1, length(in_url_list)), .combine = rbind) %dopar% news_scraping_fun(in_url_list[j])
 }
