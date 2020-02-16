@@ -33,10 +33,7 @@ library(tmcn)     #NTUSD: National Taiwan University Semantic Dictionary 中文�
 library(devtools) #install_github()
 library(cidian)   #可以安装搜狗词典,install_github("qinwf/cidian") 
 library(topicmodels)  #LDA
-```
-
-```{r 调用网页抓取函数}
-source("xwlb_scraping_fun.r", encoding = "utf-8") #会调用脚本中的库
+source("xwlb_scraping_fun.r", encoding = "utf-8") #调用预设函数会调用脚本中的库
 ```
 
 ```{r 字典管理}
@@ -349,13 +346,16 @@ object_size(news_result_dtm)
 #LDA算法
 news_lda_5 <- LDA(news_result_dtm, k = 5, control = list(seed = 100)) #计算时间较长
 news_lda_5
+class(news_lda_5)
+str(news_lda_5)
+terms(news_lda_5, 5) #每个主题概率(beta)最高5个词
 ```
 
 ```{r 输出每个词属于每个主题的概率, fig.height=8, fig.width=20}
 #重新转为tidy格式
 news_lda_5_tidy_word <- tidy(news_lda_5, matrix = "beta")
 news_lda_5_tidy_word
-
+news_lda_5_tidy_word %>% group_by(topic) %>% add_tally(beta) #每个主题所有词概率总和=1
 #每个主题最具代表性的10个词
 # news_lda_5_tidy_word %>% 
 #   group_by(topic) %>% 
@@ -388,10 +388,12 @@ news_lda_5_tidy_word %>%
 #重新转为tidy格式
 news_lda_5_tidy_doc <- tidy(news_lda_5, matrix = "gamma")
 news_lda_5_tidy_doc
+news_lda_5_tidy_doc %>% group_by(document) %>% add_tally(gamma) #每个文档gamma之和=1
 ```
 
 ```{r 将每个文档每个单词分配给一个主题}
-assign <- augment(news_lda_5, data = news_result_dtm)
+ #将每个词归属给概率最高的那个主题
+assign <- augment(news_lda_5, data = news_result_dtm) 
 assign
 ```
 
