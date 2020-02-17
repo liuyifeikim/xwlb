@@ -8,7 +8,6 @@ output: html_document
 2、当每个cl的任务中的函数需要第三方库，如何提前在每个cl中导入库：clusterEvalQ, clusterExport
 4、主题模型
 5、创建n元词组
-6、group_by柱状图排序问题
 7、停词管理
 
 
@@ -33,6 +32,10 @@ library(tmcn)     #NTUSD: National Taiwan University Semantic Dictionary 中文�
 library(devtools) #install_github()
 library(cidian)   #可以安装搜狗词典,install_github("qinwf/cidian") 
 library(topicmodels)  #LDA
+```
+
+
+```{r 调用网页爬取函数}
 source("xwlb_scraping_fun.r", encoding = "utf-8") #调用预设函数会调用脚本中的库
 ```
 
@@ -67,7 +70,6 @@ news_result <- all_scraping_fun_new()  #自动侦测末页页码
 head(news_result)
 object_size(news_result)
 class(news_result)
-stopCluster(cl)     #在函数中停止没有用
 getDoParWorkers()   #看有多少worder
 getDoParName()      #看集群名称
 ```
@@ -350,6 +352,20 @@ class(news_lda_5)
 str(news_lda_5)
 terms(news_lda_5, 5) #每个主题概率(beta)最高5个词
 ```
+
+```{r 评估模型效果}
+logLik(news_lda_5) #值越大越好
+perplexity(news_lda_5, news_result_dtm)  #值越小越好
+```
+
+```{r 肘部法评估主题数}
+cl <- makeCluster(detectCores())
+registerDoParallel(cl)
+log_lik_vec <- foreach(k = 2:13, .combine = c) %dopar% logLik(LDA(news_result_dtm, k = k, control = list(seed = 100)))
+stopCluster(cl)
+log_lik_vec
+```
+
 
 ```{r 输出每个词属于每个主题的概率, fig.height=8, fig.width=20}
 #重新转为tidy格式
