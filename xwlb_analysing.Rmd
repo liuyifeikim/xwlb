@@ -3,12 +3,13 @@ title: "analysing"
 output: html_document
 ---
 
-0、词典问题：jieba字典组合为一个大txt
+0、词典问题：jieba分词字典组合为一个大txt
 1、用并行方法实现每行分词：lapply改为parLapply、parLapplyLB、future_lapply等
 2、当每个cl的任务中的函数需要第三方库，如何提前在每个cl中导入库：clusterEvalQ, clusterExport
 4、主题模型
 5、创建n元词组
 7、停词管理
+8、大连本体库研究
 
 
 ```{r}
@@ -32,6 +33,7 @@ library(tmcn)     #NTUSD: National Taiwan University Semantic Dictionary 中文�
 library(devtools) #install_github()
 library(cidian)   #可以安装搜狗词典,install_github("qinwf/cidian") 
 library(topicmodels)  #LDA
+library(trelliscopejs)
 ```
 
 
@@ -284,9 +286,56 @@ qh_degrade <- read_csv("./清华大学李军中文褒贬义词典/degrade.txt", 
 qh_praise
 qh_degrade
 
-#大连理工大学情感词汇本体库
+#大连理工大学情感词汇本体库：词数量最多
 dl_benti <- read_xlsx("./大连理工大学情感词汇本体库/情感词汇本体.xlsx")
 dl_benti
+set.seed(1)
+dl_benti %>% 
+  select(`词语`, `词性种类`, `情感分类`, `强度..6`, `极性..7`) %>% 
+  rename(word = `词语`, type = `词性种类`, emotion = `情感分类`, degree = `强度..6`, pn = `极性..7`) %>% 
+  mutate(emotion_big_ch = case_when(emotion %in% c("PA", "PE") ~ "乐",
+                                    emotion %in% c("PD", "PH", "PG", "PB", "PK") ~ "好",
+                                    emotion %in% c("NA") ~ "怒",
+                                    emotion %in% c("NB", "NJ", "NH", "PF") ~ "哀",
+                                    emotion %in% c("NI", "NC", "NG") ~ "惧",
+                                    emotion %in% c("NE", "ND", "NN", "NK", "NL") ~ "恶",
+                                    emotion %in% c("PC") ~ "惊"),
+         emotion_ch = case_when(emotion == "PA" ~ "快乐",
+                                emotion == "PE" ~ "安心",
+                                emotion == "PD" ~ "尊敬",
+                                emotion == "PH" ~ "赞扬",
+                                emotion == "PG" ~ "相信",
+                                emotion == "PB" ~ "喜爱",
+                                emotion == "PK" ~ "祝愿",
+                                emotion == "NA" ~ "愤怒",
+                                emotion == "NB" ~ "悲伤",
+                                emotion == "NJ" ~ "失望",
+                                emotion == "NH" ~ "疚",
+                                emotion == "PF" ~ "思",
+                                emotion == "NI" ~ "慌",
+                                emotion == "NC" ~ "恐惧",
+                                emotion == "NG" ~ "羞",
+                                emotion == "NE" ~ "烦闷",
+                                emotion == "ND" ~ "憎恶",
+                                emotion == "NN" ~ "贬责",
+                                emotion == "NK" ~ "妒忌",
+                                emotion == "NL" ~ "怀疑",
+                                emotion == "PC" ~ "惊奇"),
+         type_ch = case_when(type == "noun" ~ "名词",
+                             type == "verb" ~ "动词",
+                             type == "adj" ~ "形容词",
+                             type == "adv" ~ "副词",
+                             type == "nw" ~ "网络用语",
+                             type == "idiom" ~ "成语",
+                             type == "prep" ~ "介词短语"),
+         pn_ch = case_when(pn == 0 ~ "中性",
+                           pn == 1 ~ "褒义",
+                           pn == 2 ~ "贬义",
+                           pn == 3 ~ "褒贬")) %>% 
+  select(word, type_ch, emotion_big_ch, emotion_ch, degree, pn_ch) %>% 
+  group_by(word) %>% 
+  sample_n(1) -> dl_benti_s #每个词随机保留1条
+dl_benti_s
 ```
 
 ```{r 匹配情感词典, fig.width=20, fig.height=10}
@@ -335,6 +384,63 @@ news_result_score %>% filter(praise == 1) %>% count(word) %>% top_n(wt = n, n = 
 news_result_score %>% filter(degrade == 1) %>% count(word) %>% top_n(wt = n, n = 10) %>% arrange(desc(n))
 ```
 
+```{r 情感极性词典分析, fig.height=10, fig.width=20}
+#每种情绪每天的变化
+news_result_tidy_jb %>% 
+  inner_join(dl_benti_s, by = "word") %>% 
+  count(emotion_ch) %>% 
+  arrange(desc(n))
+
+news_result_tidy_jb %>% 
+  inner_join(dl_benti_s, by = "word") %>% 
+  count(emotion_big_ch) %>% 
+  arrange(desc(n))
+```
+
+
+```{r 情感极性词典分析, fig.height=10, fig.width=20}
+#因子水平处理
+dl_benti_s$emotion_big_ch_f <- factor(dl_benti_s$emotion_big_ch, levels = c("好", "乐", "恶", "哀", "惧", "怒", "惊"))
+levels(dl_benti_s$emotion_big_ch_f)
+dl_benti_s$emotion_big_ch_f <- factor(dl_benti_s$emotion_big_ch_f , 
+                                      levels = rev(levels(dl_benti_s$emotion_big_ch_f))) #翻转levels
+levels(dl_benti_s$emotion_big_ch_f)
+
+#每天情绪大类比例
+news_result_tidy_jb %>% 
+  inner_join(dl_benti_s, by = "word") %>% 
+  count(date, emotion_big_ch_f) %>% 
+  ggplot(aes(date, n, fill = emotion_big_ch_f)) +
+  geom_col(position = "fill") +
+  theme(axis.title = element_blank())
+```
+
+```{r, fig.height=12, fig.width=20}
+#每天情绪程度分析
+news_result_tidy_jb %>% 
+  inner_join(dl_benti_s, by = "word") %>% 
+  count(date, emotion_ch, degree) %>% 
+  mutate(score = degree * n) %>% 
+  group_by(date, emotion_ch) %>% 
+  summarise(score_sum = sum(score)) %>% 
+  ggplot(aes(date, score_sum, color = emotion_ch)) +
+  geom_line() +
+  facet_wrap(~emotion_ch, nrow = 6, ncol = 4) +
+  theme(legend.position = "none")
+
+news_result_tidy_jb %>% 
+  inner_join(dl_benti_s, by = "word") %>% 
+  count(date, emotion_big_ch_f, degree) %>% 
+  mutate(score = degree * n) %>% 
+  group_by(date, emotion_big_ch_f) %>% 
+  summarise(score_sum = sum(score)) %>% 
+  ggplot(aes(date, score_sum, color = emotion_big_ch_f)) +
+  geom_line() +
+  facet_grid(~emotion_big_ch_f) +
+  theme(legend.position = "none")
+```
+
+
 ```{r 主题模型}
 #需要先将tidy格式转为dtm格式
 news_result_tidy_jb %>% 
@@ -359,11 +465,13 @@ perplexity(news_lda_5, news_result_dtm)  #值越小越好
 ```
 
 ```{r 肘部法评估主题数}
-cl <- makeCluster(detectCores())
-registerDoParallel(cl)
-log_lik_vec <- foreach(k = 2:13, .combine = c) %dopar% logLik(LDA(news_result_dtm, k = k, control = list(seed = 100)))
-stopCluster(cl)
-log_lik_vec
+# cl <- makeCluster(detectCores())
+# registerDoParallel(cl)
+# log_lik_vec <- foreach(k = 2:13, .combine = c) %dopar% logLik(LDA(news_result_dtm, k = k, control = list(seed = 100)))
+# perplexity_vec <- foreach(k = 2:13, .combine = c) %dopar% perplexity(LDA(news_result_dtm, k = k, control = list(seed = 100)), news_result_dtm)
+# stopCluster(cl)
+plot(log_lik_vec, type = "o")
+plot(perplexity_vec, type = "o")
 ```
 
 
