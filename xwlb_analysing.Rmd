@@ -34,6 +34,7 @@ library(devtools) #install_github()
 library(cidian)   #可以安装搜狗词典,install_github("qinwf/cidian") 
 library(topicmodels)  #LDA
 library(trelliscopejs)
+library(scales)  #percent_format
 ```
 
 
@@ -77,6 +78,7 @@ getDoParName()      #看集群名称
 ```
 
 ```{r 内容初步清理}
+#str_replace
 news_result %>% 
   mutate(content = str_replace_all(content,
         c("各位观众晚上好今天是年月日欢迎您收看今天的新闻联播节目今天节目的主要内容有" = "",
@@ -90,6 +92,21 @@ news_result %>%
           "新闻联播" = "",
           "央视网" = ""))) -> news_result
 head(news_result)
+
+##str_remove
+news_result %>% 
+  mutate(content = str_remove(content,
+        c("各位观众晚上好今天是年月日欢迎您收看今天的新闻联播节目今天节目的主要内容有",
+          "央视网消息新闻联播完整版",
+          "央视网消息新闻联播文字版",
+          "新闻特写",
+          "央视快评",
+          "新春走基层",
+          "国内联播快讯",
+          "国际联播快讯",
+          "新闻联播",
+          "央视网"))) -> news_result_2
+head(news_result_2)
 ```
 
 ```{r 分词函数测试}
@@ -121,7 +138,6 @@ head(news_result)
 #   return(tokens)
 #   })
 # seg_jb_la
-# 
 # #并行函数分解测试
 # cl <- makeCluster(detectCores(logical = FALSE))
 # clusterEvalQ(cl, {
@@ -135,7 +151,6 @@ head(news_result)
 # })
 # stopCluster(cl)
 # seg_jb_la_par
-# 
 # #Rwordseg分词(向量)：每行返回一个列表，每个列表是分开的词
 # seg_ansj_v_la <- lapply(content_test$content, function(x) {
 #   tokens <- segmentCN(x, returnType = "vector")
@@ -143,7 +158,6 @@ head(news_result)
 #   return(tokens)
 #   })
 # seg_ansj_v_la
-# 
 # #Rwordseg分词(tm)：每行返回一个列表，每个列表是一个完整向量，没有筛选词长度
 # seg_ansj_tm_la <- lapply(content_test$content, function(x) {
 #   tokens <- segmentCN(x, returnType = "tm")
@@ -164,7 +178,6 @@ jieba_tokenizer <- function(t) {
     return(tokens)
   })
 }
-
 #jieba并行函数
 jieba_tokenizer_par <- function(t) {
   parLapply(cl, t, function(x) {
@@ -173,7 +186,6 @@ jieba_tokenizer_par <- function(t) {
   return(tokens)
   })
 }
-
 #jieba并行函数:load balancing
 jieba_tokenizer_par_lb <- function(t) {
   parLapplyLB(cl, t, function(x) {
@@ -182,17 +194,14 @@ jieba_tokenizer_par_lb <- function(t) {
   return(tokens)
   })
 }
-
 #jieba生成二元词组函数
-jieba_tokenizer_ngram <- function(t) {
-  jieba_worker <- worker(stop_word = "stopwordsCN.txt")  #设定分词引擎
-  lapply(t, function(x) {
-    ngram <- get_tuple(segment(x, jiebar = jieba_worker), size = 2)
-    return(ngram)
-  })
-}
-
-
+# jieba_tokenizer_ngram <- function(t) {
+#   jieba_worker <- worker(stop_word = "stopwordsCN.txt")  #设定分词引擎
+#   lapply(t, function(x) {
+#     ngram <- get_tuple(segment(x, jiebar = jieba_worker), size = 2)
+#     return(ngram)
+#   })
+# }
 # #ansj函数：输出向量
 # ansj_tokenizer <- function(t) {                      
 #   lapply(t, function(x) {
@@ -201,7 +210,6 @@ jieba_tokenizer_ngram <- function(t) {
 #     return(tokens)
 #   })
 # }
-# 
 # #ansj函数2：输出tm
 # ansj_tokenizer <- function(t) {                      
 #   lapply(t, function(x) {
@@ -270,7 +278,11 @@ news_result_tidy_jb %>%
   ggplot(aes(date, prop)) +
   geom_line() +
   geom_point() +
-  geom_smooth(method = 'loess')
+  geom_smooth(method = 'loess') +
+  scale_y_continuous(labels = percent_format()) +
+  labs(title = "习近平在前1/3内容中出现次数的比例") +
+  theme(plot.title = element_text(size = 30))
+  
 ```
 
 ```{r 导入情绪词典}
@@ -279,13 +291,11 @@ ntusd_positive <- read_csv("./台湾大学的极性词/NTUSD_positive_simplified
 ntusd_negative <- read_csv("./台湾大学的极性词/NTUSD_negative_simplified.txt", col_names = "negative")
 ntusd_positive
 ntusd_negative
-
 #清华大学李军中文褒贬义词典
 qh_praise <- read_csv("./清华大学李军中文褒贬义词典/praise.txt", col_names = "praise")
 qh_degrade <- read_csv("./清华大学李军中文褒贬义词典/degrade.txt", col_names = "degrade")
 qh_praise
 qh_degrade
-
 #大连理工大学情感词汇本体库：词数量最多
 dl_benti <- read_xlsx("./大连理工大学情感词汇本体库/情感词汇本体.xlsx")
 dl_benti
@@ -362,7 +372,9 @@ news_result_tidy_jb %>%
   ggplot(aes(date, score, color = score_type), ) +
   geom_line() +
   geom_smooth(method = "loess") + 
-  theme(axis.title = element_text(size = 25),
+  labs(title = "积极情感变化趋势") +
+  theme(plot.title = element_text(size = 30),
+        axis.title = element_text(size = 20),
         axis.text = element_text(size = 15),
         legend.text = element_text(size=15),
         legend.title = element_text(size = 20),
@@ -377,7 +389,6 @@ news_result_tidy_jb %>%
          degrade = if_else(word %in% qh_degrade$degrade, 1, 0),
          good = if_else(word %in% ntusd_positive$positive | word %in% qh_praise$praise, 1, 0),
          bad = if_else(word %in% ntusd_negative$negative | word %in% qh_degrade$degrade, 1, 0)) -> news_result_score
-
 news_result_score %>% filter(positive == 1) %>% count(word) %>% top_n(wt = n, n = 10) %>% arrange(desc(n))
 news_result_score %>% filter(negative == 1) %>% count(word) %>% top_n(wt = n, n = 10) %>% arrange(desc(n))
 news_result_score %>% filter(praise == 1) %>% count(word) %>% top_n(wt = n, n = 10) %>% arrange(desc(n))
@@ -410,13 +421,16 @@ levels(dl_benti_s$emotion_big_ch_f)
 news_result_tidy_jb %>% 
   inner_join(dl_benti_s, by = "word") %>% 
   count(date, emotion_big_ch_f) %>% 
-  ggplot(aes(date, n, fill = emotion_big_ch_f)) +
+  ggplot(aes(date, n, fill = fct_rev(emotion_big_ch_f))) + #调转因子水平
   geom_col(position = "fill") +
-  theme(axis.title = element_blank())
+  scale_y_continuous(labels = percent_format()) +
+  labs(title = "情感结构变化趋势", fill = "情感类型") +  #图例标题设定
+  theme(plot.title = element_text(size = 30),
+        axis.title = element_blank()) 
 ```
 
-```{r, fig.height=12, fig.width=20}
-#每天情绪程度分析
+```{r 每天情绪程度分析, fig.height=12, fig.width=20}
+#情感小类
 news_result_tidy_jb %>% 
   inner_join(dl_benti_s, by = "word") %>% 
   count(date, emotion_ch, degree) %>% 
@@ -426,8 +440,10 @@ news_result_tidy_jb %>%
   ggplot(aes(date, score_sum, color = emotion_ch)) +
   geom_line() +
   facet_wrap(~emotion_ch, nrow = 6, ncol = 4) +
-  theme(legend.position = "none")
-
+  labs(title = "情感小类变化趋势") +
+  theme(plot.title = element_text(size = 30),
+        legend.position = "none")
+#情感大类
 news_result_tidy_jb %>% 
   inner_join(dl_benti_s, by = "word") %>% 
   count(date, emotion_big_ch_f, degree) %>% 
@@ -437,7 +453,9 @@ news_result_tidy_jb %>%
   ggplot(aes(date, score_sum, color = emotion_big_ch_f)) +
   geom_line() +
   facet_grid(~emotion_big_ch_f) +
-  theme(legend.position = "none")
+  labs(title = "情感大类变化趋势") +
+  theme(plot.title = element_text(size = 30),
+        legend.position = "none")
 ```
 
 
@@ -489,7 +507,6 @@ news_lda_5_tidy_word %>% group_by(topic) %>% add_tally(beta) #每个主题所有
 #   coord_flip() +
 #   facet_wrap(~topic, nrow = 1, scales = "free") +
 #   theme(axis.text = element_text(size=15))
-
 #确保每个group中降序排列的写法
 #https://trinkerrstuff.wordpress.com/2016/12/23/ordering-categories-within-ggplot2-facets/
 news_lda_5_tidy_word %>% 
