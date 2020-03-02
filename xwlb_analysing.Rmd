@@ -3,13 +3,15 @@ title: "analysing"
 output: html_document
 ---
 
-0、词典问题：jieba分词字典组合为一个大txt
-1、用并行方法实现每行分词：lapply改为parLapply、parLapplyLB、future_lapply等
-2、当每个cl的任务中的函数需要第三方库，如何提前在每个cl中导入库：clusterEvalQ, clusterExport
-4、主题模型
-5、创建n元词组
-7、停词管理
-8、大连本体库研究
+待解决：
+创建n元词组:NLP库
+大连本体库研究
+词典问题：jieba分词字典组合为一个大txt
+用并行方法实现每行分词：lapply改为parLapply、parLapplyLB、future_lapply等
+当每个cl的任务中的函数需要第三方库，如何提前在每个cl中导入库：clusterEvalQ, clusterExport
+主题模型
+停词管理
+
 
 
 ```{r}
@@ -79,19 +81,19 @@ getDoParName()      #看集群名称
 
 ```{r 内容初步清理}
 #str_replace
-news_result %>% 
-  mutate(content = str_replace_all(content,
-        c("各位观众晚上好今天是年月日欢迎您收看今天的新闻联播节目今天节目的主要内容有" = "",
-          "央视网消息新闻联播完整版" = "",
-          "央视网消息新闻联播文字版" = "",
-          "新闻特写" = "",
-          "央视快评" = "",
-          "新春走基层" = "",
-          "国内联播快讯" = "",
-          "国际联播快讯" = "",
-          "新闻联播" = "",
-          "央视网" = ""))) -> news_result
-head(news_result)
+# news_result %>% 
+#   mutate(content = str_replace_all(content,
+#         c("各位观众晚上好今天是年月日欢迎您收看今天的新闻联播节目今天节目的主要内容有" = "",
+#           "央视网消息新闻联播完整版" = "",
+#           "央视网消息新闻联播文字版" = "",
+#           "新闻特写" = "",
+#           "央视快评" = "",
+#           "新春走基层" = "",
+#           "国内联播快讯" = "",
+#           "国际联播快讯" = "",
+#           "新闻联播" = "",
+#           "央视网" = ""))) -> news_result
+# head(news_result)
 
 ##str_remove
 news_result %>% 
@@ -105,8 +107,11 @@ news_result %>%
           "国内联播快讯",
           "国际联播快讯",
           "新闻联播",
-          "央视网"))) -> news_result_2
-head(news_result_2)
+          "央视网",
+          "文字",
+          "播音",
+          "年月日"))) -> news_result
+head(news_result)
 ```
 
 ```{r 分词函数测试}
@@ -282,7 +287,6 @@ news_result_tidy_jb %>%
   scale_y_continuous(labels = percent_format()) +
   labs(title = "习近平在前1/3内容中出现次数的比例") +
   theme(plot.title = element_text(size = 30))
-  
 ```
 
 ```{r 导入情绪词典}
@@ -399,13 +403,11 @@ news_result_score %>% filter(degrade == 1) %>% count(word) %>% top_n(wt = n, n =
 #每种情绪每天的变化
 news_result_tidy_jb %>% 
   inner_join(dl_benti_s, by = "word") %>% 
-  count(emotion_ch) %>% 
-  arrange(desc(n))
+  count(emotion_ch, sort = TRUE)
 
 news_result_tidy_jb %>% 
   inner_join(dl_benti_s, by = "word") %>% 
-  count(emotion_big_ch) %>% 
-  arrange(desc(n))
+  count(emotion_big_ch, sort = TRUE)
 ```
 
 
@@ -438,11 +440,11 @@ news_result_tidy_jb %>%
   group_by(date, emotion_ch) %>% 
   summarise(score_sum = sum(score)) %>% 
   ggplot(aes(date, score_sum, color = emotion_ch)) +
-  geom_line() +
+  geom_line(show.legend = FALSE) +
   facet_wrap(~emotion_ch, nrow = 6, ncol = 4) +
   labs(title = "情感小类变化趋势") +
-  theme(plot.title = element_text(size = 30),
-        legend.position = "none")
+  theme(plot.title = element_text(size = 30))
+
 #情感大类
 news_result_tidy_jb %>% 
   inner_join(dl_benti_s, by = "word") %>% 
@@ -451,11 +453,10 @@ news_result_tidy_jb %>%
   group_by(date, emotion_big_ch_f) %>% 
   summarise(score_sum = sum(score)) %>% 
   ggplot(aes(date, score_sum, color = emotion_big_ch_f)) +
-  geom_line() +
+  geom_line(show.legend = FALSE) +
   facet_grid(~emotion_big_ch_f) +
   labs(title = "情感大类变化趋势") +
-  theme(plot.title = element_text(size = 30),
-        legend.position = "none")
+  theme(plot.title = element_text(size = 30))
 ```
 
 
@@ -536,5 +537,12 @@ news_lda_5_tidy_doc %>% group_by(document) %>% add_tally(gamma) #每个文档gam
  #将每个词归属给概率最高的那个主题
 assign <- augment(news_lda_5, data = news_result_dtm) 
 assign
+```
+
+```{r 关键词研究}
+news_result_tidy_jb %>% 
+  count(date, word, sort = TRUE) %>% 
+  bind_tf_idf(document = date, term = word, n = n) %>% 
+  arrange(-tf_idf)
 ```
 
