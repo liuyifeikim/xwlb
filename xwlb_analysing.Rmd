@@ -4,7 +4,7 @@ output: html_document
 ---
 
 待解决：
-创建n元词组:NLP库
+创建n元词组:NLP库;自定义函数N
 大连本体库研究
 词典问题：jieba分词字典组合为一个大txt
 用并行方法实现每行分词：lapply改为parLapply、parLapplyLB、future_lapply等
@@ -37,6 +37,7 @@ library(cidian)   #可以安装搜狗词典,install_github("qinwf/cidian")
 library(topicmodels)  #LDA
 library(trelliscopejs)
 library(scales)  #percent_format
+library(NLP)     #ngrams
 ```
 
 
@@ -199,14 +200,6 @@ jieba_tokenizer_par_lb <- function(t) {
   return(tokens)
   })
 }
-#jieba生成二元词组函数
-# jieba_tokenizer_ngram <- function(t) {
-#   jieba_worker <- worker(stop_word = "stopwordsCN.txt")  #设定分词引擎
-#   lapply(t, function(x) {
-#     ngram <- get_tuple(segment(x, jiebar = jieba_worker), size = 2)
-#     return(ngram)
-#   })
-# }
 # #ansj函数：输出向量
 # ansj_tokenizer <- function(t) {                      
 #   lapply(t, function(x) {
@@ -544,5 +537,47 @@ news_result_tidy_jb %>%
   count(date, word, sort = TRUE) %>% 
   bind_tf_idf(document = date, term = word, n = n) %>% 
   arrange(-tf_idf)
+```
+
+```{r n元词组研究}
+news_result_test <- head(news_result, 3)
+
+s_list <- lapply(news_result_test$content, function(x) {
+  tokens <- segment(x, jiebar = jieba_worker)
+  tokens <- tokens[nchar(tokens) > 1]
+  return(tokens)
+  })
+s_list
+
+n_grams <- lapply(s_list, function(x){
+  vapply(ngrams(x, 2), paste, "", collapse = " ")
+  })
+n_grams
+
+#jieba函数
+jieba_tokenizer_bigrams <- function(t) {
+  jieba_worker <- worker(stop_word = "stopwordsCN.txt")  #设定分词引擎
+  tokens <- lapply(t, function(x) {
+    tokens <- segment(x, jiebar = jieba_worker)
+    tokens <- tokens[nchar(tokens) > 1] #筛选长度>1的词
+    return(tokens)
+  })
+  bigrams <- lapply(tokens, function(x){
+    vapply(ngrams(x, 2), paste, "", collapse = " ")
+    })
+  return(bigrams)
+}
+news_result %>% unnest_tokens(input = content, output = word, token = jieba_tokenizer_bigrams)
+```
+
+```{r}
+s <- "The quick brown fox jumps over the lazy dog"
+## Split into words:
+w <- strsplit(s, " ", fixed = TRUE)[[1L]]
+w
+## Word tri-grams:
+ngrams(w, 3L)
+## Word tri-grams pasted together:
+vapply(ngrams(w, 3L), paste, "", collapse = " ")
 ```
 
