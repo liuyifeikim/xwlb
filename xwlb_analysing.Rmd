@@ -38,6 +38,7 @@ library(topicmodels)  #LDA
 library(trelliscopejs)
 library(scales)  #percent_format
 library(NLP)     #ngrams
+library(widyr)
 ```
 
 
@@ -542,33 +543,52 @@ news_result_tidy_jb %>%
 ```{r n元词组研究}
 news_result_test <- head(news_result, 3)
 
-s_list <- lapply(news_result_test$content, function(x) {
+s_list <- lapply(news_result_test$content, function(x) {  #对每个元素套用函数并返回列表
+  jieba_worker <- worker(stop_word = "stopwordsCN.txt") 
   tokens <- segment(x, jiebar = jieba_worker)
   tokens <- tokens[nchar(tokens) > 1]
   return(tokens)
   })
-s_list
+#s_list
 
-n_grams <- lapply(s_list, function(x){
+n_grams <- lapply(s_list, function(x){                    #对每个元素套用函数并返回列表
   vapply(ngrams(x, 2), paste, "", collapse = " ")
   })
 n_grams
+```
 
-#jieba函数
-jieba_tokenizer_bigrams <- function(t) {
-  jieba_worker <- worker(stop_word = "stopwordsCN.txt")  #设定分词引擎
+
+```{r n元词组研究}
+#n元词组拆分函数
+jieba_tokenizer_ngrams <- function(t, n) {
+  #设定分词引擎
+  jieba_worker <- worker(stop_word = "stopwordsCN.txt")  
+  #分成单个词
   tokens <- lapply(t, function(x) {
     tokens <- segment(x, jiebar = jieba_worker)
     tokens <- tokens[nchar(tokens) > 1] #筛选长度>1的词
     return(tokens)
   })
-  bigrams <- lapply(tokens, function(x){
-    vapply(ngrams(x, 2), paste, "", collapse = " ")
+  #转换为ngrams
+  n_grams <- lapply(tokens, function(x){
+    vapply(ngrams(x, n), paste, "", collapse = " ")
     })
-  return(bigrams)
+  #返回结果
+  return(n_grams)
 }
-news_result %>% unnest_tokens(input = content, output = word, token = jieba_tokenizer_bigrams)
+
+#拆分n元词组
+news_result %>% unnest_tokens(input = content, output = word, token = jieba_tokenizer_ngrams, n = 2)
 ```
+
+```{r n元词组分析}
+news_result %>% 
+  unnest_tokens(input = content, output = word, token = jieba_tokenizer_ngrams, n = 2) %>% 
+  separate(word, into = c("word1", "word2")) %>% 
+  filter(word1 == "习近平") %>% 
+  count(word2, sort = TRUE)
+```
+
 
 ```{r}
 s <- "The quick brown fox jumps over the lazy dog"
