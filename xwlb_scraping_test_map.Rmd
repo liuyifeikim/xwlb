@@ -1,0 +1,332 @@
+---
+title: "第五章 R语言的并行编程"
+output: word_document
+---
+
+# 使用tidyverse和future并行相结合
+
+上个小节介绍的整个数据爬取流程是以foreach并行循环为核心实现的，整体而言代码量还是有点多，而且在设定过程中还要注意在foreach函数中导入相关的库和函数，比较容易出错。那么还有没有其他选择呢？
+熟悉tidyverse的用户大概会了解到，tidyverse的重要成员成员purrr库提供了map()映射函数族，该函数族对目标元素套用相应的函数并生成计算结果，例如对每个内文链接套用内文抓取函数完成内文的抓取，而且所有的操作都可以整合到管道操作中，直接在tibble数据框中完成，使得整个过程比for循环或foreach循环更具有可读性。
+purrr的map()函数族主要优势在于提高代码编写的效率，本身并不会明显提升计算速度。针对这样的情况，近年开发的furrr库，将purrr库map()函数族的计算性能上升到一个新的高度，它提供了将map()函数族和future并行框架相结合的方案，使得用户可以通过并行计算执行map()的映射操作，使得这类操作不但代码编写高效，也能高速运算。下面我们通过使用上述思路，对整个爬取过程进行改写。先载入相关第三方库，
+
+
+```{r setup, message=FALSE}
+library(tidyverse)
+library(rvest)
+library(lubridate)
+library(tictoc)
+# library(doFuture)
+library(furrr)
+```
+
+
+```{r 单页面测试：内文url}
+# 提取内文url
+# out_url <- "http://www.xwlb.net.cn/video_1.html"
+# page <- read_html(out_url)
+# page %>% html_nodes("h2 a") %>% html_attr("href")
+```
+
+
+同样地，我们自定义两个函数，分别是根据每页的url提取该页所有内文url列表的函数，以及对每个内文url提取日期和内文的函数，每一步的具体解释可参见上一小节，在此不再重复：
+
+```{r}
+# 每页内文url抓取函数
+in_url_scraping_fun <- function(page_url){
+  
+  # 抓取每页内文url
+  in_url <- read_html(page_url) %>% html_nodes("h2 a") %>% html_attr("href") 
+  
+  # 返回结果
+  return(in_url)
+  
+  }
+
+
+# 将单页新闻全文爬取过程封装为函数
+news_scraping_fun <- function(in_url){
+  
+  # 读取网页
+  news <- read_html(in_url)
+  
+  # 提取日期
+  date <- news %>% 
+    html_node(".xwlb h2") %>% 
+    html_text(trim = TRUE) %>% 
+    str_replace_all(c("《新闻联播》主要内容" = "",  "[年|月|日]" = "")) %>% 
+  ymd() 
+  
+  # 提取内容
+  content <- news %>% 
+    html_node(".content") %>% 
+    html_text(trim = TRUE) %>% 
+    str_replace_all(c("\\W" = "", "\\d" = "", "[a-zA-Z]" = ""))
+  
+  # 合并为tibble
+  news_tib <- tibble(date, content)
+  
+  # 返回结果
+  return(news_tib)
+  
+  }
+```
+
+此外我们也通过第1页自动提取最后一页的页码。
+
+```{r}
+# 自动抓取网站中最后一页的页码
+last_page <- read_html("http://www.xwlb.net.cn/video_1.html") %>% 
+  html_nodes("a:nth-child(13)") %>% 
+  html_attr("href") %>% 
+  str_extract("\\d+") %>% 
+  as.integer()
+
+# 查看结果
+last_page
+```
+
+
+```{r 单页面测试:内容抓取}
+# # 提取页面
+# in_url <- "http://www.xwlb.net.cn/16262.html"
+# news <- read_html(in_url)
+# 
+# # 提取日期
+# news %>% 
+#   html_nodes(".xwlb h2") %>% 
+#   html_text(trim = TRUE) %>% 
+#   str_replace_all(c("《新闻联播》主要内容" = "",  "[年|月|日]" = "")) %>% 
+#   ymd() -> date
+# 
+# # 提取链接
+# news %>% 
+#   html_node(".content") %>% 
+#   html_text(trim = TRUE) %>% 
+#   str_replace_all(c("\\W" = "", "\\d" = "", "[a-zA-Z]" = "")) -> content
+# 
+# # 将两部分合并为一个tibble
+# tibble(date, content)
+```
+
+
+接下来开始建立爬取流程，整个流程将使用tidyverse风格的做法去完成，我们大致将流程分为3步：
+
+第1步，我们创建一列页码，范围为第1页至自动提取得到的最后一页页码，然后我们利用页码，使用str_glue()函数生成每页的url：
+
+```{r}
+# 生成页码列及每页url页
+tibble(page = 1:last_page) %>%
+  mutate(page_url = str_glue("http://www.xwlb.net.cn/video_{page}.html"))
+```
+
+第2步，我们使用purrr库的map()函数，在每页的url上使用前面创建的内文url抓取函数in_url_scraping_fun()。可以看到in_url列是一个格式为list的嵌套列，每一行中均保存了每页爬取下来的10个内文url：
+
+```{r}
+# 抓取每页所有内文url
+tibble(page = 1:last_page) %>%
+  mutate(page_url = str_glue("http://www.xwlb.net.cn/video_{page}.html")) %>%
+  mutate(in_url = map(page_url, in_url_scraping_fun)) %>%
+```
+
+由于下一步中我们需要对每一个内文url爬取内文全文，因此对于in_url列，我们需要使用unnest()进行“解套”。解套后，整个数据被拉长为每个内文url为单独的一行：
+
+```{r}
+# 对内文url列进行解套
+tibble(page = 1:last_page) %>%
+  mutate(page_url = str_glue("http://www.xwlb.net.cn/video_{page}.html")) %>%
+  mutate(in_url = map(page_url, in_url_scraping_fun)) %>% 
+  unnest(in_url)
+```
+
+第3步，对每个内文url，我们参照上一步的操作，使用map()对其套用内文全文爬取函数news_scraping_fun()，可以看到，生成的内文全文的content列格式同样为list：
+
+```{r}
+# 抓取内文全文
+tibble(page = 1:last_page) %>%
+  mutate(page_url = str_glue("http://www.xwlb.net.cn/video_{page}.html")) %>%
+  mutate(in_url = map(page_url, in_url_scraping_fun)) %>%
+  unnest(in_url) %>% 
+  mutate(content = map(in_url, news_scraping_fun))
+```
+
+可以看到，生成的内文全文的content列格式同样为list，因此我们再次套用unnest()函数对该列进行解套：
+
+```{r}
+# 对内文全文列进行解套
+tibble(page = 1:last_page) %>%
+  mutate(page_url = str_glue("http://www.xwlb.net.cn/video_{page}.html")) %>%
+  mutate(in_url = map(page_url, in_url_scraping_fun)) %>%
+  unnest(in_url) %>% 
+  mutate(content = map(in_url, news_scraping_fun)) %>% 
+  unnest(content)
+```
+
+以下为将以上3步整合在一起，并保留需要的列，即日期和新闻全文，保存在对象news_result_map当中。从运行速度来看，该流程耗时整体比单线程的foreach循环爬取流程要快。
+
+```{r}
+# 全流程整合，只保留日期和全文
+tic()
+news_result_map <-
+tibble(page = 1:last_page) %>%
+  mutate(page_url = str_glue("http://www.xwlb.net.cn/video_{page}.html")) %>%
+  mutate(in_url = map(page_url, in_url_scraping_fun)) %>%
+  unnest(in_url) %>%
+  mutate(content = map(in_url, news_scraping_fun)) %>%
+  select(content) %>%
+  unnest(content)
+toc()
+
+# 查看结果 
+news_result_map
+```
+
+```{r}
+# 全流程整合：嵌套版
+tic()
+news_result_map_nest <-
+tibble(page = 1:last_page) %>%
+  mutate(page_url = str_glue("http://www.xwlb.net.cn/video_{page}.html")) %>%
+  mutate(in_url = map(page_url, in_url_scraping_fun)) %>%
+  unnest(in_url) %>%
+  mutate(content = map(in_url, news_scraping_fun)) %>%
+  select(content)
+toc()
+
+# 查看结果
+news_result_map_nest
+```
+
+
+
+```{r}
+# 全流程：并行版本
+plan(multisession)
+tic()
+news_result_map <- 
+  tibble(page = 1:last_page) %>% 
+  mutate(page_url = str_glue("http://www.xwlb.net.cn/video_{page}.html")) %>% 
+  mutate(in_url = future_map(page_url, in_url_scraping_fun)) %>% 
+  unnest(in_url) %>% 
+  mutate(content = future_map(in_url, news_scraping_fun)) %>% 
+  select(content) %>% 
+  unnest(content)
+toc()
+plan(sequential)
+news_result_map
+```
+
+
+```{r}
+# 全部内文爬取函数
+news_scaping_map_fun <- function(){
+  
+  # 建立并行集群
+  plan(multisession)
+  
+  # 自动识别最后一页
+  last_page <- read_html("http://www.xwlb.net.cn/video_1.html") %>% 
+    html_nodes("a:nth-child(13)") %>% 
+    html_attr("href") %>% 
+    str_extract("\\d+") %>% 
+    as.integer()
+
+  # 内文爬取
+  news_result_map <- 
+    tibble(page = 1:last_page) %>% 
+    mutate(page_url = str_glue("http://www.xwlb.net.cn/video_{page}.html")) %>% 
+    mutate(in_url = future_map(page_url, in_url_scraping_fun)) %>% 
+    unnest(in_url) %>% 
+    mutate(content = future_map(in_url, news_scraping_fun)) %>% 
+    select(content) %>% 
+    unnest(content)
+  
+  # 停止并行
+  plan(sequential)
+  
+  # 返回结果
+  return(news_result_map)
+  
+  }
+```
+
+
+```{r}
+tic()
+news_result_map <- news_scaping_map_fun()
+toc()
+news_result_map
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+# 总函数：可以直接实现
+news_scaping_map_fun_all <- function(){
+  
+  # 建立并行集群
+  plan(multisession)
+  
+  # 内文链接爬取函数
+  in_url_scraping_fun_tmp <- function(page_url){
+    in_url <- read_html(page_url) %>% html_nodes("h2 a") %>% html_attr("href") 
+    return(in_url)
+    }
+  
+  # 将单页新闻全文爬取过程封装为函数
+  news_scraping_fun_tmp <- function(in_url){
+    news <- read_html(in_url)
+    date <- news %>% 
+      html_node(".xwlb h2") %>% 
+      html_text(trim = TRUE) %>% 
+      str_replace_all(c("《新闻联播》主要内容" = "",  "[年|月|日]" = "")) %>% 
+    ymd() 
+    content <- news %>% 
+      html_node(".content") %>% 
+      html_text(trim = TRUE) %>% 
+      str_replace_all(c("\\W" = "", "\\d" = "", "[a-zA-Z]" = ""))
+    news_tib <- tibble(date, content)
+    return(news_tib)
+    }
+  
+  # 自动识别最后一页
+  last_page <- read_html("http://www.xwlb.net.cn/video_1.html") %>% 
+    html_nodes("a:nth-child(13)") %>% 
+    html_attr("href") %>% 
+    str_extract("\\d+") %>% 
+    as.integer()
+
+  # 内文爬取
+  result <- 
+    tibble(page = 1:last_page) %>% 
+    mutate(page_url = str_glue("http://www.xwlb.net.cn/video_{page}.html")) %>% 
+    mutate(in_url = future_map(page_url, in_url_scraping_fun_tmp)) %>% 
+    unnest(in_url) %>% 
+    mutate(content = future_map(in_url, news_scraping_fun_tmp)) %>% 
+    select(content) %>% 
+    unnest(content)
+  
+  # 停止并行
+  plan(sequential)
+  
+  # 返回结果
+  return(result)
+  
+  }
+```
+
+
+```{r}
+# 总函数测试
+tic()
+news_result_map <- news_scaping_map_fun_all()
+toc()
+news_result_map
+```
+
