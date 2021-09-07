@@ -1,0 +1,133 @@
+---
+title: "Untitled"
+output: word_document
+---
+
+1、如何建立存储效率较高的矩阵格式
+2、如何建立相似度矩阵
+3、如何建立简单的基于内容的推荐系统，以相似度为主要计算依据
+
+```{r, message=FALSE}
+library(tidyverse)
+library(tidytext)
+library(jiebaR)
+library(parallel)
+library(furrr)
+library(pryr)
+library(FNN)
+library(Matrix)
+```
+
+
+```{r}
+news_result <- read_csv("news_result(20200907).csv", locale = locale(encoding = "GBK"))
+news_result %>% head()
+news_result <- news_result %>% 
+  filter(!is.na(content)) %>% 
+  mutate(id = row_number()) %>% 
+  select(id, everything(),-date)
+news_result %>% head()
+```
+
+```{r}
+# 分词函数
+jieba_tokenizer <- function(t) {
+  jieba_worker <- worker(stop_word = "stopwordsCN.txt")  #设定分词引擎
+  lapply(t, function(x) {
+    tokens <- segment(x, jiebar = jieba_worker)
+    tokens <- tokens[nchar(tokens) > 1] #筛选长度>1的词
+    return(tokens)
+  })
+}
+jieba_tokenizer_par <- function(t) {
+  parLapply(cl, t, function(x) {
+    tokens <- segment(x, jiebar = jieba_worker)
+    tokens <- tokens[nchar(tokens) > 1]
+    return(tokens)
+  })
+  }
+```
+
+
+```{r}
+# 分词
+cl <- makeCluster(detectCores())
+clusterEvalQ(
+  cl = cl, 
+  expr = {
+    library(jiebaR)
+    jieba_worker <- worker(stop_word = "stopwordsCN.txt")
+  })
+news_result_tidy_jb <- news_result %>% unnest_tokens(input = content, output = word, token = jieba_tokenizer_par)
+stopCluster(cl)
+news_result_tidy_jb
+```
+
+
+```{r}
+# 提取100个关键词
+news_result_top_100 <- news_result_tidy_jb %>% 
+  count(id, word) %>% 
+  bind_tf_idf(document = id, term = word, n = n) %>% 
+  group_by(id) %>% 
+  slice_max(n = 100, order_by = tf_idf)
+news_result_top_100
+```
+
+```{r}
+# 转化为dtm，作为转换matrix的中介
+news_result_top_100_dtm <- cast_dtm(data = news_result_top_100,
+                                    document = id,
+                                    term = word,
+                                    value = tf_idf)
+news_result_top_100_dtm
+object_size(news_result_top_100_dtm)
+```
+
+
+```{r}
+# 转化为矩阵
+news_result_top_100_mat <- as.matrix(news_result_top_100_dtm)
+object_size(news_result_top_100_mat)
+dim(news_result_top_100_mat)
+news_result_top_100_mat[1:10, 1:10]
+```
+
+```{r}
+# 计算最相似的K个近邻
+knn_res <- get.knn(news_result_top_100_mat, k = 5)
+knn_res$nn.index %>% head(10)
+```
+
+```{r}
+# 手动构建dtm
+news_result_top_100_wide <- news_result_top_100 %>% 
+  pivot_wider(id_cols = id, names_from = word, values_from = value, values_fill = 0) %>%
+  ungroup(id) %>% 
+  select(-id)
+news_result_top_100_wide %>% head()
+object_size(news_result_top_100_wide)
+```
+
+```{r}
+# 计算最相似的K个近邻
+knn_res_wide <- get.knn(news_result_top_100_wide, k = 5)
+knn_res_wide$nn.index %>% head(10)
+```
+
+
+```{r}
+# 转为稀疏矩阵
+col_names <- dimnames(news_result_top_100_mat)$Terms
+row_names <- dimnames(news_result_top_100_mat)$Docs
+news_result_top_100_smat <- Matrix(news_result_top_100_mat, dimnames = list(row_names, col_names), sparse = TRUE)
+news_result_top_100_smat[1:10, 1:10]
+object_size(news_result_top_100_smat)
+news_result_top_100_smat@Dim
+```
+
+```{r}
+# 计算最相似的K个近邻
+knn_res_smat <- get.knn(news_result_top_100_smat, k = 5)
+knn_res_smat$nn.index %>% head(10)
+```
