@@ -16,6 +16,8 @@ library(furrr)
 library(pryr)
 library(FNN)
 library(Matrix)
+library(foreach)
+library(furrr)
 ```
 
 
@@ -23,9 +25,7 @@ library(Matrix)
 news_result <- read_csv("news_result(20200907).csv", locale = locale(encoding = "GBK"))
 news_result %>% head()
 news_result <- news_result %>% 
-  filter(!is.na(content)) %>% 
-  mutate(id = row_number()) %>% 
-  select(id, everything(),-date)
+  filter(!is.na(content))
 news_result %>% head()
 ```
 
@@ -67,9 +67,9 @@ news_result_tidy_jb
 ```{r}
 # 提取100个关键词
 news_result_top_100 <- news_result_tidy_jb %>% 
-  count(id, word) %>% 
-  bind_tf_idf(document = id, term = word, n = n) %>% 
-  group_by(id) %>% 
+  count(date, word) %>% 
+  bind_tf_idf(document = date, term = word, n = n) %>% 
+  group_by(date) %>% 
   slice_max(n = 100, order_by = tf_idf)
 news_result_top_100
 ```
@@ -77,7 +77,7 @@ news_result_top_100
 ```{r}
 # 转化为dtm，作为转换matrix的中介
 news_result_top_100_dtm <- cast_dtm(data = news_result_top_100,
-                                    document = id,
+                                    document = date,
                                     term = word,
                                     value = tf_idf)
 news_result_top_100_dtm
@@ -102,9 +102,9 @@ knn_res$nn.index %>% head(10)
 ```{r}
 # 手动构建dtm
 news_result_top_100_wide <- news_result_top_100 %>% 
-  pivot_wider(id_cols = id, names_from = word, values_from = value, values_fill = 0) %>%
-  ungroup(id) %>% 
-  select(-id)
+  pivot_wider(id_cols = date, names_from = word, values_from = tf_idf, values_fill = 0) %>%
+  ungroup(date) %>% 
+  select(-date)
 news_result_top_100_wide %>% head()
 object_size(news_result_top_100_wide)
 ```
@@ -131,3 +131,97 @@ news_result_top_100_smat@Dim
 knn_res_smat <- get.knn(news_result_top_100_smat, k = 5)
 knn_res_smat$nn.index %>% head(10)
 ```
+
+```{r}
+dim(knn_res_smat$nn.index)
+```
+
+
+```{r}
+knn_res_smat$nn.index[1,]
+recommend_id <- knn_res_smat$nn.index[1, ]
+recommend_id
+news_result[recommend_id, 2]
+```
+
+
+```{r}
+recommend_fun <- function(i){
+  recommend_id <- knn_res_smat$nn.index[i, ]
+  recommend_news <- news_result[recommend_id, 2]
+  return(recommend_news)
+}
+```
+
+
+```{r}
+plan(multisession)
+news_result %>%
+  mutate(recommend = future_map(id, recommend_fun)) %>% 
+  unnest(recommend) %>% 
+  select(-content)
+plan(sequential)
+```
+
+
+```{r}
+total_recommend_fun <- function(tibble, keyword_num  = 100, k = 5){
+  # 删除缺失值
+  tibble <- tibble %>% filter(!is.na(content))
+   # 分词
+  cl <- makeCluster(detectCores())
+  clusterEvalQ(
+    cl = cl, 
+    expr = {
+      library(jiebaR)
+      jieba_worker <- worker(stop_word = "stopwordsCN.txt")
+      })
+  jieba_tokenizer_par <- function(t) {
+    parLapply(cl, t, function(x) {
+      tokens <- segment(x, jiebar = jieba_worker)
+      tokens <- tokens[nchar(tokens) > 1]
+      return(tokens)
+    })
+    }
+  tibble_tidy_jb <- tibble %>% unnest_tokens(input = content, output = word, token = jieba_tokenizer_par)
+  
+  # 提取关键词
+  tibble_top <- tibble_tidy_jb %>% 
+    count(date, word) %>% 
+    bind_tf_idf(document = date, term = word, n = n) %>% 
+    group_by(date) %>% 
+    slice_max(n = keyword_num, order_by = tf_idf)
+  
+  # 转为稀疏矩阵
+  row_names <- rownames(tibble_top)
+  col_names <- colnames(tibble_top)
+  tibble_top_smat <- Matrix(tibble_top, dimnames = list(row_names, col_names), sparse = TRUE)
+  
+  # 相似度最高的k条记录
+  knn_res_smat <- get.knn(tibble_top_smat, k = k)
+  
+  # 输出推荐结果
+  recommend_fun <- function(i){
+    recommend_id <- knn_res_smat$nn.index[i, ]
+    recommend_news <- news_result[recommend_id, 2]
+    return(recommend_news)
+    }
+  plan(multisession)
+  news_recommend_result <- news_result %>%
+    mutate(recommend = future_map(date, recommend_fun)) %>% 
+    unnest(recommend) %>% 
+    select(-content)
+  plan(sequential)
+  
+  # 返回结果
+  return(news_recommend_result)
+  
+  }
+```
+
+
+```{r}
+news_recommend_result <- total_recommend_fun(news_result)
+news_recommend_result
+```
+
