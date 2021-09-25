@@ -12,16 +12,16 @@ output: html_document
 主题模型
 停词管理
 
-
-
-```{r}
+```{r, message=FALSE}
 #抓取函数需要的库
 library(lubridate)
 library(tidyverse)
 library(rvest)
 library(foreach)
-library(doParallel)
 library(parallel)
+library(doParallel)
+library(future)
+library(doFuture)
 
 #分析需要的库
 library(readxl) #read_xlsx
@@ -33,14 +33,13 @@ library(jiebaR)
 library(Rwordseg) #要装jdk，rjava并设置系统环境 http://jianl.org/cn/R/Rwordseg.html
 library(tmcn)     #NTUSD: National Taiwan University Semantic Dictionary 中文情感极性词典;stopwordsCN() 中文停用词
 library(devtools) #install_github()
-library(cidian)   #可以安装搜狗词典,install_github("qinwf/cidian") 
+#library(cidian)  #可以安装搜狗词典,install_github("qinwf/cidian") https://qinwenfeng.com/doc/jiebaR_v0_8/cidian.html
 library(topicmodels)  #LDA
 library(trelliscopejs)
 library(scales)  #percent_format
 library(NLP)     #ngrams
-library(widyr)
+library(widyr)   #pairwise_count
 ```
-
 
 ```{r 调用网页爬取函数}
 source("xwlb_scraping_fun.r", encoding = "utf-8") #调用预设函数会调用脚本中的库
@@ -65,15 +64,16 @@ scan(file = "D:/Program Files/Microsoft/R Open/R-3.5.3/library/jiebaRD/dict/user
 #输出tmcn包的中文停词，用在worker中
 #write_delim(tibble(stopwordsCN()),"stopwordsCN.txt",col_names = FALSE) 
 
-# dict <- dir("./Dict") #查看文件夹文件,等于list.file
-# for (i in 1:length(dict)){
-#   installDict(paste("./Dict", dict[i], sep='/'), dictname = dict[i]) #Rwordseg的installDict函数
-# }   #循环安装字典
-# listDict()  #需要cidian库的decode_scel函数将scel文件转为dict文件
+#循环安装字典
+dict <- dir("./Dict") #查看文件夹文件,等于list.file
+for (i in 1:length(dict)){
+  installDict(paste("Dict", dict[i], sep='/')) #Rwordseg的installDict函数
+}   
+listDict()  #需要cidian库的decode_scel函数将scel文件转为dict文件
 ```
 
 ```{r 抓取网页}
-news_result <- all_scraping_fun_new()  #自动侦测末页页码
+news_result <- all_scraping_fun_parallel(12)  #在不同脚本中跑会报错
 head(news_result)
 object_size(news_result)
 class(news_result)
@@ -81,39 +81,24 @@ getDoParWorkers()   #看有多少worder
 getDoParName()      #看集群名称
 ```
 
-```{r 内容初步清理}
-#str_replace
-# news_result %>% 
-#   mutate(content = str_replace_all(content,
-#         c("各位观众晚上好今天是年月日欢迎您收看今天的新闻联播节目今天节目的主要内容有" = "",
-#           "央视网消息新闻联播完整版" = "",
-#           "央视网消息新闻联播文字版" = "",
-#           "新闻特写" = "",
-#           "央视快评" = "",
-#           "新春走基层" = "",
-#           "国内联播快讯" = "",
-#           "国际联播快讯" = "",
-#           "新闻联播" = "",
-#           "央视网" = ""))) -> news_result
-# head(news_result)
 
-##str_remove
+```{r 内容初步清理}
 news_result %>% 
-  mutate(content = str_remove(content,
-        c("各位观众晚上好今天是年月日欢迎您收看今天的新闻联播节目今天节目的主要内容有",
-          "央视网消息新闻联播完整版",
-          "央视网消息新闻联播文字版",
-          "新闻特写",
-          "央视快评",
-          "新春走基层",
-          "国内联播快讯",
-          "国际联播快讯",
-          "新闻联播",
-          "央视网",
-          "文字",
-          "播音",
-          "年月日"))) -> news_result
-head(news_result)
+  mutate(content = str_remove_all(content,
+        "(各位观众晚上好今天是年月日欢迎您收看今天的新闻联播节目今天节目的主要内容有)|
+         (央视网消息新闻联播完整版)|
+         (央视网消息新闻联播文字版)|
+         (新闻特写)|
+         (央视快评)|
+         (新春走基层)|
+         (国内联播快讯)|
+         (国际联播快讯)|
+         (新闻联播)|
+         (央视网)|
+         (文字)|
+         (播音)|
+         (年月日)")) -> news_result
+news_result %>% head(10)
 ```
 
 ```{r 分词函数测试}
@@ -133,7 +118,7 @@ head(news_result)
 # seg_ansj_tm <- segmentCN(content_test$content, returnType = "tm")
 # seg_ansj_tm
 
-#get_tuple(segment(content_test$content, worker()), size = 2)
+# get_tuple(segment(content_test$content, worker()), size = 2)
 ```
 
 
@@ -493,6 +478,7 @@ plot(perplexity_vec, type = "o")
 news_lda_5_tidy_word <- tidy(news_lda_5, matrix = "beta")
 news_lda_5_tidy_word
 news_lda_5_tidy_word %>% group_by(topic) %>% add_tally(beta) #每个主题所有词概率总和=1
+
 #每个主题最具代表性的10个词
 # news_lda_5_tidy_word %>% 
 #   group_by(topic) %>% 
@@ -502,6 +488,7 @@ news_lda_5_tidy_word %>% group_by(topic) %>% add_tally(beta) #每个主题所有
 #   coord_flip() +
 #   facet_wrap(~topic, nrow = 1, scales = "free") +
 #   theme(axis.text = element_text(size=15))
+
 #确保每个group中降序排列的写法
 #https://trinkerrstuff.wordpress.com/2016/12/23/ordering-categories-within-ggplot2-facets/
 news_lda_5_tidy_word %>% 
@@ -528,7 +515,7 @@ news_lda_5_tidy_doc %>% group_by(document) %>% add_tally(gamma) #每个文档gam
 ```
 
 ```{r 将每个文档每个单词分配给一个主题}
- #将每个词归属给概率最高的那个主题
+#将每个词归属给概率最高的那个主题
 assign <- augment(news_lda_5, data = news_result_dtm) 
 assign
 ```
@@ -589,6 +576,12 @@ news_result %>%
   count(word2, sort = TRUE)
 ```
 
+```{r}
+#会爆内存
+news_result_tidy_jb %>% pairwise_count(item = word, feature = date)
+news_result_tidy_jb %>% pairwise_cor(item = word, feature = date, method = "pearson", sort = TRUE, upper = FALSE)
+```
+
 
 ```{r}
 s <- "The quick brown fox jumps over the lazy dog"
@@ -599,5 +592,16 @@ w
 ngrams(w, 3L)
 ## Word tri-grams pasted together:
 vapply(ngrams(w, 3L), paste, "", collapse = " ")
+```
+
+```{r}
+dat <- data_frame(group = rep(1:5, each = 2),
+                  letter = c("a", "b",
+                             "a", "c",
+                             "a", "c",
+                             "b", "e",
+                             "b", "f"))
+dat
+dat %>% pairwise_count(item = letter, feature = group, sort = TRUE, upper = FALSE)
 ```
 
