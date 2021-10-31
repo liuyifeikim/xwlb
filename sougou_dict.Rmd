@@ -1,0 +1,33 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r}
+library(Rwordseg) 
+```
+
+```{r}
+# 现有词典位置，词典文件为该路径下的user.dic
+tempdir()
+```
+
+```{r}
+# 安装后，在user.dic中会自动添加词
+installDict("广州市城市信息精选.scel")
+```
+
+```{r}
+installDict("拳皇词库正式版.scel")
+```
+
+```{r}
+# 自定义环境，不适用临时目录tempdir()
+setAppDir("custom_user_dict")
+```
+
+```{r}
+# 要将dicmeta和option.rds两个文件都放到目录下才能安装成功
+installDict("社会学专业词库.scel")
+```
+
