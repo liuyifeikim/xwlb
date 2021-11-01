@@ -22,12 +22,20 @@ installDict("拳皇词库正式版.scel")
 ```
 
 ```{r}
-# 自定义环境，不适用临时目录tempdir()
+# 自定义环境，不使用用临时目录tempdir()
 setAppDir("custom_user_dict")
 ```
 
 ```{r}
 # 要将dicmeta和option.rds两个文件都放到目录下才能安装成功
 installDict("社会学专业词库.scel")
+```
+
+```{r}
+scel_list <- dir("dict_scel")
+scel_list
+for (i in 1:length(scel_list)) {
+  installDict(paste("dict_scel", scel_list[i], sep = "/"))
+}
 ```
 
